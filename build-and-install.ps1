@@ -245,6 +245,9 @@ if ($mode -eq 'all' -or $mode -eq 'launcher') {
             $manifestContent = $manifestContent -replace '(<category android:name="android\.intent\.category\.HOME"\s*/>)', "`$1`r`n                <category android:name=`"android.intent.category.COMMON_HOME`" />"
             Set-Content -Path $manifestPath -Value $manifestContent -Encoding utf8
         }
+    } elseif ($enabledNow -match 'package:com\.vstv\.mercurytransit') {
+        Write-Host 'Detected VSTV MercuryTransit stock launcher on hi352l (-StockLauncher com.vstv.mercurytransit).'
+        $stockArg = @('-StockLauncher', 'com.vstv.mercurytransit')
     } elseif ($enabledNow -match 'package:com\.zeasn\.whale\.saas') {
         $stockArg = @('-StockLauncher', 'com.zeasn.whale.saas')
     } elseif ($enabledNow -match 'package:com\.bestv\.ott') {
@@ -266,6 +269,9 @@ if ($mode -eq 'all' -or $mode -eq 'launcher') {
     & $py -I $tvPy --screenshot (Join-Path $shotsDir '11-dpad-right.png') DPAD_RIGHT
     & $py -I $tvPy --screenshot (Join-Path $shotsDir '12-dpad-up-topbar.png') DPAD_UP
     & $py -I $tvPy --screenshot (Join-Path $shotsDir '13-dpad-down-dock.png') DPAD_DOWN
+    Write-Host ''
+    Write-Host 'Vendor / third-party packages currently enabled on TV:'
+    & $py -I $tvPy 'pm list packages -e --user 0' | Where-Object { $_ -notmatch '^package:(android|com\.android\.|com\.google\.android\.)' } | ForEach-Object { Write-Host "  $_" }
     $ErrorActionPreference = 'Stop'
 }
 

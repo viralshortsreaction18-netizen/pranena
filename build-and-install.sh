@@ -194,6 +194,9 @@ if [ "$MODE" = "all" ] || [ "$MODE" = "launcher" ]; then
       echo "Detected CVTE firmware on HiSilicon hi352l."
       echo "Keeping stock CVTE launcher enabled (STOCK_LAUNCHER=none) per safety rules (#741 / #1201)."
       export STOCK_LAUNCHER=none
+    elif printf '%s\n' "$ENABLED_NOW" | grep -qx 'package:com.vstv.mercurytransit'; then
+      echo "Detected VSTV MercuryTransit stock launcher on HiSilicon hi352l (STOCK_LAUNCHER=com.vstv.mercurytransit)."
+      export STOCK_LAUNCHER=com.vstv.mercurytransit
     elif printf '%s\n' "$ENABLED_NOW" | grep -qx 'package:com.zeasn.whale.saas'; then
       echo "Detected Zeasn Whale OS launcher on HiSilicon hi352l (STOCK_LAUNCHER=com.zeasn.whale.saas)."
       export STOCK_LAUNCHER=com.zeasn.whale.saas

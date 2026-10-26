@@ -57,7 +57,7 @@ if ($ArgsList.Count -gt 0) {
 }
 
 $listPath = if ($ArgsList.Count -ge 1 -and $ArgsList[0]) { (Resolve-Path $ArgsList[0]).Path } else { Join-Path $root 'debloat.txt' }
-$stockPkg = if ($ArgsList.Count -ge 2 -and $ArgsList[1]) { $ArgsList[1] } else { 'com.google.android.tvlauncher' }
+$stockPkg = if ($ArgsList.Count -ge 2 -and $ArgsList[1]) { $ArgsList[1] } else { 'com.vstv.mercurytransit' }
 
 Write-Host "Restoring hi352l TV at $tvHost using $listPath ..."
 & powershell -ExecutionPolicy Bypass -File $restorePs1 -TvHost $tvHost -Stock $stockPkg $listPath

@@ -117,7 +117,7 @@ echo "Restoring hi352l TV at $TV_HOST using $LIST..."
 if [ -n "${2:-}" ]; then
   "$CYT/tools/restore.sh" "$LIST" "$2"
 else
-  "$CYT/tools/restore.sh" "$LIST"
+  "$CYT/tools/restore.sh" "$LIST" com.vstv.mercurytransit
 fi
 
 echo ""
