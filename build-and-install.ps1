@@ -4,6 +4,7 @@ param(
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgsList
 )
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $OutputEncoding = New-Object System.Text.UTF8Encoding $false
 
 $root = $PSScriptRoot
@@ -175,10 +176,12 @@ if ($mode -eq 'all' -or $mode -eq 'launcher') {
             $portableJdkRoot = Join-Path $toolchainDir 'jdk17'
             $existingJava = Get-ChildItem $portableJdkRoot -Recurse -Filter 'java.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $existingJava) {
-                Write-Host 'Downloading portable Eclipse Temurin OpenJDK 17 for Windows x64...'
+                Write-Host 'Downloading portable Eclipse Temurin OpenJDK 17 for Windows x64 (fast curl)...'
                 $jdkZip = Join-Path $toolchainDir 'jdk17.zip'
-                Invoke-WebRequest -Uri 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse' -OutFile $jdkZip
-                Expand-Archive -Path $jdkZip -DestinationPath $portableJdkRoot -Force
+                & curl.exe -L --retry 3 -o "$jdkZip" "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse"
+                if ($LASTEXITCODE -ne 0) { throw 'curl download of OpenJDK 17 failed' }
+                New-Item -ItemType Directory -Force -Path $portableJdkRoot | Out-Null
+                & tar.exe -xf "$jdkZip" -C "$portableJdkRoot"
                 Remove-Item -Force $jdkZip
                 $existingJava = Get-ChildItem $portableJdkRoot -Recurse -Filter 'java.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
             }
@@ -197,12 +200,15 @@ if ($mode -eq 'all' -or $mode -eq 'launcher') {
         $portableSdk = Join-Path $toolchainDir 'android-sdk'
         $sdkManagerBat = Join-Path $portableSdk 'cmdline-tools\latest\bin\sdkmanager.bat'
         if (-not (Test-Path $sdkManagerBat)) {
-            Write-Host 'Downloading Android Command-Line Tools for Windows...'
+            Write-Host 'Downloading Android Command-Line Tools for Windows (fast curl)...'
             $cmdZip = Join-Path $toolchainDir 'cmdline-tools.zip'
-            Invoke-WebRequest -Uri 'https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip' -OutFile $cmdZip
+            & curl.exe -L --retry 3 -o "$cmdZip" "https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip"
+            if ($LASTEXITCODE -ne 0) { throw 'curl download of Android Command-Line Tools failed' }
+            Write-Host 'Extracting Android Command-Line Tools (fast tar)...'
             $extractTmp = Join-Path $toolchainDir 'cmdline-tmp'
             if (Test-Path $extractTmp) { Remove-Item -Recurse -Force $extractTmp }
-            Expand-Archive -Path $cmdZip -DestinationPath $extractTmp -Force
+            New-Item -ItemType Directory -Force -Path $extractTmp | Out-Null
+            & tar.exe -xf "$cmdZip" -C "$extractTmp"
             Remove-Item -Force $cmdZip
             $latestDir = Join-Path $portableSdk 'cmdline-tools\latest'
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $latestDir) | Out-Null
