@@ -1,0 +1,26 @@
+{
+  "columns": 4,
+  "dock_apps": [
+    "com.netflix.ninja",
+    "com.amazon.amazonvideo.livingroom",
+    "com.google.android.youtube.tv",
+    "in.startv.hotstar"
+  ],
+  "fill_dock": true,
+  "dock_row": true,
+  "dock_band": true,
+  "dock_glass": false,
+  "dock_title": true,
+  "rows_below_dock": 0,
+  "ambient_glow": true,
+  "glow_style": "radial",
+  "glass_style": "glass",
+  "focus_overshoot": true,
+  "animations": true,
+  "advanced_effects": false,
+  "reduced_motion": false,
+  "show_greeting": true,
+  "show_inputs_pill": true,
+  "show_network_pill": true,
+  "wallpaper": false
+}

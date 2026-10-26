@@ -1,0 +1,133 @@
+# CleanYourTV Debloat List — HiSilicon hi352l (Hi352 / Hi3751V350 / Hi3751V352)
+# Target TV IP: 172.30.102.100
+# Preferences applied:
+#   - Connection: Wi-Fi (172.30.102.100), nothing in USB ports
+#   - Keep: Streaming apps, Chromecast / AirPlay / Miracast, Firmware Updater, Live TV / HDMI inputs, Play Store & Play Services
+#   - Disable: Hi352/CVTE/Zeasn/OEM telemetry & ad services, manufacturer bloat rows, Voice Assistant (Google Assistant / Alexa), unneeded background providers
+#
+# Apply:
+#   TV_HOST=172.30.102.100 ./cleanyourtv/tools/disable.sh debloat.txt
+# Undo:
+#   TV_HOST=172.30.102.100 ./restore.sh
+#
+# CRITICAL SAFETY RULES FOR hi352l (HiSilicon Hi352 / Hi3751V350):
+#   - NEVER disable com.hisilicon.tv.service, com.hisilicon.tv.menu, or com.hisilicon.rmservice
+#     (they drive the TV menu, picture, HDMI inputs, and remote accessibility service).
+#   - NEVER disable com.cvte.tv.launcher.space on CVTE boards (no FallbackHome exists).
+#   - NEVER disable com.cvte.tvservice, com.cvte.tv.api.impl, com.cvte.tv.setting,
+#     com.cvte.tv.globalui, com.cvte.settings, or com.sdt.app.skysettings.
+#   - NEVER launch com.cvte.fac.menu, com.cvte.factory.*, or com.cvte.tv.hkcfac over ADB.
+
+# ==============================================================================
+# BATCH 1: Hi352 OEM Ad Services, Portal Push & Telemetry (CVTE / Zeasn / TPV)
+# ==============================================================================
+
+# CVTE on HiSilicon Hi352 ads, cloud push & telemetry
+com.cvte.gaia.ad.service
+com.cvte.wonder.cloud.service
+com.cvte.industries
+
+# Zeasn / Skyworth HiSi352 ad portal & third-party store
+com.zeasn.deviceportal.asdprovider.skyworth_hisi352
+zeasn.open.technical.tv.store
+
+# Google / Android TV telemetry & diagnostics
+com.google.android.feedback
+com.android.tv.feedbackconsent
+com.google.android.partnersetup
+com.google.android.carriersetup
+com.google.android.tv.remotecontrol.logging
+com.google.android.apps.tv.netoscope
+
+# ACR & analytics (safe if absent: disable.sh skips packages not on the TV)
+tv.samba.ssm.ui
+tv.inscape.tvclient.inscapeacr
+com.skyworth.aisense
+com.tcl.logkit
+org.droidtv.candeebug
+org.droidtv.gel
+org.droidtv.usagelogger
+org.droidtv.tv.frameworklogger
+
+# ==============================================================================
+# BATCH 2: Manufacturer Content, Ad Screensaver, "Cleaner" & Preloaded Bloat
+# ==============================================================================
+
+# CVTE ad screensaver & background "cleaner"
+com.cvte.tv.pictorial
+com.cvte.tv.steward
+
+# Hi352 preloaded office / third-party stores & phone leftovers
+cn.wps.moffice_i18n_TV
+ru.vk.store.tv
+com.android.simappdialog
+com.google.android.syncadapters.contacts
+com.google.android.apps.pixelmigrate
+com.android.wallpaperbackup
+com.android.sharedstoragebackup
+
+# Wired-only USB phone casting (wireless Chromecast / Miracast / AirPlay stay enabled)
+com.toofifi.lineserver
+com.mphotool.usbcastserver
+
+# TPV / BestV ad & recommendation services (if present on TPV HiSilicon builds)
+com.tpv.asc.taadserver
+com.tianci.ad
+com.tpv.app.recommendation
+com.funshion.publicity
+tv.fun.bugreporter
+
+# ==============================================================================
+# BATCH 3: Voice Assistant & Wake-Word Services (Disabled per your selection)
+# To re-enable Voice Assistant later:
+#   TV_HOST=172.30.102.100 ./restore.sh --enable-voice
+# ==============================================================================
+
+com.google.android.katniss
+com.google.android.speech.pumpkin
+org.droidtv.amazonalexa
+
+# ==============================================================================
+# BATCH 4: Unneeded Background Providers & Print Spooler
+# ==============================================================================
+
+com.android.providers.calendar
+com.android.providers.contacts
+com.android.printspooler
+com.android.bips
+com.android.dreams.basic
+
+# ==============================================================================
+# KEPT ENABLED ON hi352l (Commented out — DO NOT UNCOMMENT)
+# ==============================================================================
+
+# --- HiSilicon Core TV, Menu, Remote & Media (REQUIRED — DO NOT DISABLE) ---
+# com.hisilicon.tv.service
+# com.hisilicon.tv.menu
+# com.hisilicon.rmservice
+# com.hisilicon.higallery
+# com.hisilicon.android.videoplayer
+
+# --- Wireless Casting: Miracast, Chromecast & AirPlay (KEPT per your preference) ---
+# com.hisilicon.miracast
+# com.google.android.apps.mediashell
+# com.android.toofifi
+# com.maxhub.screenshare.server.tv
+# com.screenshare.platform
+# com.cvte.dssshare.dlna
+
+# --- CVTE / Skyworth Settings, Inputs & Store (REQUIRED — DO NOT DISABLE) ---
+# com.cvte.tv.launcher.space
+# com.cvte.tvservice
+# com.cvte.tv.api.impl
+# com.cvte.tv.setting
+# com.cvte.tv.globalui
+# com.cvte.settings
+# com.cvte.tv.weather
+# com.stark.store
+# com.sdt.app.skysettings
+# com.sdt.projectionservice
+
+# --- Firmware Updaters (KEPT per your preference) ---
+# com.cvte.tv.systemupgrade
+# com.google.android.gms.update

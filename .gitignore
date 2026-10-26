@@ -1,0 +1,8 @@
+cleanyourtv/
+backup/
+shots/
+work/
+*.apk
+*.aab
+.DS_Store
+__pycache__/
