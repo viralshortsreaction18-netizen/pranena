@@ -54,9 +54,10 @@ org.droidtv.tv.frameworklogger
 # BATCH 2: Manufacturer Content, Ad Screensaver, "Cleaner" & Preloaded Bloat
 # ==============================================================================
 
-# CVTE ad screensaver & background "cleaner"
-com.cvte.tv.pictorial
-com.cvte.tv.steward
+# VSTV (Wisdom Share) Hi352 cleaner, setup wizard & voice/search assistant
+com.vstv.tv.assistant
+com.vstv.tvwizard
+com.vs.phone.remote.search.assistants
 
 # Hi352 preloaded office / third-party stores & phone leftovers
 cn.wps.moffice_i18n_TV

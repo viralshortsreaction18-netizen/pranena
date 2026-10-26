@@ -1,10 +1,10 @@
 {
   "columns": 4,
   "dock_apps": [
-    "com.google.android.youtube.tv",
+    "com.lagradost.cloudstream3",
+    "com.cricfytv.sports",
     "org.xbmc.kodi",
-    "com.netflix.ninja",
-    "com.amazon.amazonvideo.livingroom"
+    "cm.aptoidetv.pt"
   ],
   "fill_dock": true,
   "dock_row": true,
@@ -24,7 +24,10 @@
   "show_network_pill": true,
   "wallpaper": false,
   "app_library": true,
+  "live_tv_package": "com.vstv.tvui",
   "hidden_apps": [
-    "com.android.traceur"
+    "com.android.traceur",
+    "com.vstv.tvui",
+    "com.hisilicon.tvui"
   ]
 }
