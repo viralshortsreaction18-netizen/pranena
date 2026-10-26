@@ -27,7 +27,8 @@ com.cvte.gaia.ad.service
 com.cvte.wonder.cloud.service
 com.cvte.industries
 
-# Zeasn / Skyworth HiSi352 ad portal & third-party store
+# Zeasn / Skyworth HiSi352 ad portal, search/content service & third-party store
+com.zeasn.services.general
 com.zeasn.deviceportal.asdprovider.skyworth_hisi352
 zeasn.open.technical.tv.store
 

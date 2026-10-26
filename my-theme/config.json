@@ -1,10 +1,10 @@
 {
   "columns": 4,
   "dock_apps": [
-    "com.netflix.ninja",
-    "com.amazon.amazonvideo.livingroom",
     "com.google.android.youtube.tv",
-    "in.startv.hotstar"
+    "org.xbmc.kodi",
+    "com.netflix.ninja",
+    "com.amazon.amazonvideo.livingroom"
   ],
   "fill_dock": true,
   "dock_row": true,
@@ -22,5 +22,11 @@
   "show_greeting": true,
   "show_inputs_pill": true,
   "show_network_pill": true,
-  "wallpaper": false
+  "wallpaper": false,
+  "app_library": true,
+  "hidden_apps": [
+    "com.android.traceur"
+  ],
+  "live_tv_package": "",
+  "source_panel_service": "com.cvte.tv.globalui/.InputSourceActivity"
 }

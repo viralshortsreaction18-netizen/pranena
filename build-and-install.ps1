@@ -158,8 +158,70 @@ if ($mode -eq 'all' -or $mode -eq 'debloat') {
 if ($mode -eq 'all' -or $mode -eq 'launcher') {
     Write-Host ''
     Write-Host '======================================================================'
-    Write-Host 'Step 4: Building & installing the Apple TV 4K style launcher'
+    Write-Host 'Step 4: Preparing JDK 17 & Android SDK 34 and building Apple TV 4K Launcher'
     Write-Host '======================================================================'
+
+    $toolchainDir = Join-Path $workDir 'toolchain'
+    New-Item -ItemType Directory -Force -Path $toolchainDir | Out-Null
+
+    # 1. Ensure JDK 17
+    if (-not $env:JAVA_HOME -or -not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
+        $jbr = Get-ChildItem 'C:\Program Files\Android' -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName 'jbr' } | Where-Object { Test-Path "$_\bin\java.exe" } | Select-Object -First 1
+        if ($jbr) {
+            $env:JAVA_HOME = $jbr
+        } else {
+            $portableJdkRoot = Join-Path $toolchainDir 'jdk17'
+            $existingJava = Get-ChildItem $portableJdkRoot -Recurse -Filter 'java.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $existingJava) {
+                Write-Host 'Downloading portable Eclipse Temurin OpenJDK 17 for Windows x64...'
+                $jdkZip = Join-Path $toolchainDir 'jdk17.zip'
+                Invoke-WebRequest -Uri 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse' -OutFile $jdkZip
+                Expand-Archive -Path $jdkZip -DestinationPath $portableJdkRoot -Force
+                Remove-Item -Force $jdkZip
+                $existingJava = Get-ChildItem $portableJdkRoot -Recurse -Filter 'java.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if (-not $existingJava) { throw 'Failed to locate java.exe after extracting OpenJDK 17.' }
+            $env:JAVA_HOME = Split-Path -Parent (Split-Path -Parent $existingJava.FullName)
+        }
+    }
+    $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+    Write-Host "Using JAVA_HOME: $env:JAVA_HOME"
+
+    # 2. Ensure Android SDK (platforms;android-34 and build-tools;34.0.0)
+    $defaultSdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { "$env:LOCALAPPDATA\Android\Sdk" }
+    if (Test-Path (Join-Path $defaultSdk 'platforms\android-34')) {
+        $env:ANDROID_HOME = $defaultSdk
+    } else {
+        $portableSdk = Join-Path $toolchainDir 'android-sdk'
+        $sdkManagerBat = Join-Path $portableSdk 'cmdline-tools\latest\bin\sdkmanager.bat'
+        if (-not (Test-Path $sdkManagerBat)) {
+            Write-Host 'Downloading Android Command-Line Tools for Windows...'
+            $cmdZip = Join-Path $toolchainDir 'cmdline-tools.zip'
+            Invoke-WebRequest -Uri 'https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip' -OutFile $cmdZip
+            $extractTmp = Join-Path $toolchainDir 'cmdline-tmp'
+            if (Test-Path $extractTmp) { Remove-Item -Recurse -Force $extractTmp }
+            Expand-Archive -Path $cmdZip -DestinationPath $extractTmp -Force
+            Remove-Item -Force $cmdZip
+            $latestDir = Join-Path $portableSdk 'cmdline-tools\latest'
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $latestDir) | Out-Null
+            if (Test-Path $latestDir) { Remove-Item -Recurse -Force $latestDir }
+            Move-Item -Path (Join-Path $extractTmp 'cmdline-tools') -Destination $latestDir
+            Remove-Item -Recurse -Force $extractTmp
+        }
+        if (-not (Test-Path (Join-Path $portableSdk 'platforms\android-34'))) {
+            Write-Host 'Installing Android SDK Platform 34 & Build-Tools 34.0.0...'
+            $yesInput = ("y`n" * 30)
+            $yesInput | & $sdkManagerBat --sdk_root="$portableSdk" --licenses | Out-Null
+            $yesInput | & $sdkManagerBat --sdk_root="$portableSdk" "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+        }
+        $env:ANDROID_HOME = $portableSdk
+    }
+    Write-Host "Using ANDROID_HOME: $env:ANDROID_HOME"
+
+    $localProps = Join-Path $cyt 'launcher\local.properties'
+    "sdk.dir=$($env:ANDROID_HOME -replace '\\', '/')" | Out-File -Encoding ascii $localProps
+
     $ErrorActionPreference = 'Continue'
     $enabledNow = (& $py -I $tvPy 'pm list packages -e --user 0' 2>$null) -join "`n"
     $ErrorActionPreference = 'Stop'
@@ -168,6 +230,14 @@ if ($mode -eq 'all' -or $mode -eq 'launcher') {
     if ($enabledNow -match 'com\.cvte\.') {
         Write-Host 'Detected CVTE firmware on HiSilicon hi352l: keeping stock launcher enabled (-StockLauncher none).'
         $stockArg = @('-StockLauncher', 'none')
+        # Add COMMON_HOME intent category so the CVTE remote Home button recognizes TV Home (#1201)
+        $manifestPath = Join-Path $cyt 'launcher\app\src\main\AndroidManifest.xml'
+        $manifestContent = Get-Content -Raw $manifestPath
+        if ($manifestContent -notmatch 'android\.intent\.category\.COMMON_HOME') {
+            Write-Host 'Adding android.intent.category.COMMON_HOME to MainActivity for CVTE Home button support...'
+            $manifestContent = $manifestContent -replace '(<category android:name="android\.intent\.category\.HOME"\s*/>)', "`$1`r`n                <category android:name=`"android.intent.category.COMMON_HOME`" />"
+            Set-Content -Path $manifestPath -Value $manifestContent -Encoding utf8
+        }
     } elseif ($enabledNow -match 'package:com\.zeasn\.whale\.saas') {
         $stockArg = @('-StockLauncher', 'com.zeasn.whale.saas')
     } elseif ($enabledNow -match 'package:com\.bestv\.ott') {
