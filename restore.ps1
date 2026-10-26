@@ -8,7 +8,8 @@ $OutputEncoding = New-Object System.Text.UTF8Encoding $false
 
 $root = $PSScriptRoot
 $cyt = Join-Path $root 'cleanyourtv'
-if (-not $env:TV_HOST) { $env:TV_HOST = '172.30.102.100' }
+if (-not $env:TV_HOST -or -not $env:TV_HOST.Trim()) { $env:TV_HOST = '172.30.102.100' }
+$env:TV_HOST = $env:TV_HOST.Trim()
 $tvHost = $env:TV_HOST
 
 if ($ArgsList.Count -gt 0 -and ($ArgsList[0] -eq '--help' -or $ArgsList[0] -eq '-h')) {
