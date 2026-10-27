@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+<title>Pranena — Handwritten exam paper → editable Word</title>
+<meta name="description" content="Convert handwritten school exam papers in English, Hindi and Sanskrit into clean, editable Microsoft Word documents." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%9D%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+
+<!-- ══════════════════════════ Top bar ══════════════════════════ -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 4h9l5 5v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/>
+        <path d="M13 4v5h5"/><path d="M8 13h6M8 17h4"/>
+      </svg>
+    </span>
+    <div class="brand-text">
+      <strong>Pranena</strong>
+      <span>handwriting → Word</span>
+    </div>
+  </div>
+
+  <div class="doc-title-wrap">
+    <input id="doc-name" class="doc-name" placeholder="Untitled paper" aria-label="Paper name" />
+    <span id="doc-meta" class="doc-meta"></span>
+  </div>
+
+  <div class="topbar-actions">
+    <div class="seg" id="lang-seg" role="group" aria-label="Document language">
+      <button data-lang="en" class="active" type="button">English</button>
+      <button data-lang="hi" type="button">हिन्दी</button>
+      <button data-lang="sa" type="button">संस्कृतम्</button>
+      <button data-lang="mixed" type="button">Mixed</button>
+    </div>
+    <button id="btn-settings" class="btn ghost" type="button" title="API keys &amp; engines">⚙ Settings</button>
+    <button id="btn-verify" class="btn ghost" type="button" title="AI proofread against the image">✓ Verify</button>
+    <button id="btn-process" class="btn primary" type="button">▶ Read paper</button>
+    <div class="split-btn">
+      <button id="btn-export" class="btn primary" type="button">⭳ Export</button>
+      <button id="btn-export-menu" class="btn primary caret" type="button" aria-label="Export options">▾</button>
+      <div class="menu" id="export-menu" hidden>
+        <button data-fmt="docx">Microsoft Word (.docx)</button>
+        <button data-fmt="pdf">PDF (via print dialog)</button>
+        <button data-fmt="markdown">Markdown (.md)</button>
+        <button data-fmt="html">HTML (.html)</button>
+        <button data-fmt="txt">Plain text (.txt)</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════════════════ Body ══════════════════════════ -->
+<div class="layout">
+
+  <!-- ─────────── Left rail: documents + pages ─────────── -->
+  <aside class="rail" id="rail">
+    <div class="rail-head">
+      <h2>Pages</h2>
+      <button id="btn-add-page" class="icon-btn" type="button" title="Add page images">＋</button>
+    </div>
+
+    <div id="dropzone" class="dropzone" tabindex="0">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+      </svg>
+      <strong>Drop page photos here</strong>
+      <span>or click to browse · JPG, PNG, WebP</span>
+    </div>
+
+    <div id="page-list" class="page-list"></div>
+
+    <div class="rail-foot">
+      <div class="progress-wrap">
+        <div class="progress-label">
+          <span>Reviewed</span><span id="progress-pct">0%</span>
+        </div>
+        <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+        <div id="progress-detail" class="progress-detail"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ─────────── Centre: image viewer ─────────── -->
+  <section class="viewer" id="viewer">
+    <div class="viewer-head">
+      <div class="viewer-tools">
+        <button id="zoom-out" class="icon-btn" type="button" title="Zoom out">−</button>
+        <span id="zoom-level" class="zoom-level">100%</span>
+        <button id="zoom-in" class="icon-btn" type="button" title="Zoom in">＋</button>
+        <button id="zoom-fit" class="icon-btn wide" type="button" title="Fit to width">Fit</button>
+        <span class="sep"></span>
+        <label class="chk"><input type="checkbox" id="toggle-boxes" checked /> <span>Show regions</span></label>
+      </div>
+      <div class="viewer-title" id="viewer-title">No page selected</div>
+      <div class="viewer-tools right">
+        <button id="prev-page" class="icon-btn" type="button" title="Previous page">‹</button>
+        <span id="page-indicator" class="page-indicator">–</span>
+        <button id="next-page" class="icon-btn" type="button" title="Next page">›</button>
+      </div>
+    </div>
+
+    <div class="viewer-body" id="viewer-body">
+      <div class="empty-state" id="viewer-empty">
+        <div class="empty-art" aria-hidden="true">
+          <svg viewBox="0 0 120 150" width="120" height="150" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="18" y="6" width="84" height="138" rx="6"/>
+            <path d="M32 34h44M32 52h56M32 70h38M32 88h56M32 106h30"/>
+            <path d="M62 96c8-10 14-4 8 4s-14 12-8 18 22-4 26-12" stroke-dasharray="3 4"/>
+          </svg>
+        </div>
+        <h3>Upload a handwritten paper to begin</h3>
+        <p>Add page photos on the left, then press <strong>Read paper</strong>.<br/>
+           Every line is extracted, checked and ready to edit in place.</p>
+      </div>
+      <div class="canvas-wrap" id="canvas-wrap" hidden>
+        <img id="page-image" alt="Scanned page" />
+        <svg id="overlay" class="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── Right: editor ─────────── -->
+  <section class="editor" id="editor">
+    <div class="editor-head">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="text" role="tab">Transcription</button>
+        <button class="tab" data-tab="preview" role="tab">Paper preview</button>
+        <button class="tab" data-tab="paper" role="tab">Paper details</button>
+      </div>
+    </div>
+
+    <!-- Transcription tab -->
+    <div class="tab-panel active" data-panel="text">
+      <div class="editor-toolbar">
+        <input id="search" class="search" type="search" placeholder="Search text…" aria-label="Search" />
+        <label class="chk"><input type="checkbox" id="filter-flagged" /> <span>Flagged only</span></label>
+        <label class="chk"><input type="checkbox" id="filter-todo" /> <span>Not reviewed</span></label>
+        <button id="btn-verify-all" class="btn tiny ghost" type="button">Mark all reviewed</button>
+      </div>
+      <div id="corrections" class="corrections" hidden></div>
+      <div id="block-list" class="block-list">
+        <div class="empty-state small">
+          <p>Nothing extracted yet.</p>
+          <p class="muted">Upload pages and press <strong>Read paper</strong>.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview tab -->
+    <div class="tab-panel" data-panel="preview">
+      <div id="preview" class="preview"></div>
+    </div>
+
+    <!-- Paper details tab -->
+    <div class="tab-panel" data-panel="paper">
+      <div class="form" id="paper-form">
+        <label>Paper title<input data-field="title" type="text" placeholder="Half Yearly Examination 2025-26" /></label>
+        <label>Subtitle<input data-field="subtitle" type="text" placeholder="Class X · Mathematics" /></label>
+        <div class="grid2">
+          <label>Subject<input data-field="subject" type="text" /></label>
+          <label>Class<input data-field="class_name" type="text" /></label>
+          <label>Session<input data-field="session" type="text" /></label>
+          <label>Duration<input data-field="duration" type="text" placeholder="3 hours" /></label>
+          <label>Maximum marks<input data-field="max_marks" type="text" placeholder="80" /></label>
+          <label>Date<input data-field="date" type="text" placeholder="27-10-2026" /></label>
+        </div>
+        <label>Institution / header<input data-field="institution" type="text" placeholder="Delhi Public School" /></label>
+        <label>Footer text<input data-field="footer_text" type="text" /></label>
+
+        <h4>Layout</h4>
+        <div class="grid2">
+          <label>Latin font<input data-field="font_latin" type="text" /></label>
+          <label>Devanagari font<input data-field="font_devanagari" type="text" /></label>
+          <label>Size (pt)<input data-field="font_size_pt" type="number" step="0.5" min="8" max="20" /></label>
+          <label>Line spacing<input data-field="line_spacing" type="number" step="0.1" min="1" max="3" /></label>
+          <label>Question numbering<input data-field="question_number_format" type="text" placeholder="{n}." /></label>
+          <label>Page size
+            <select data-field="page_size"><option>A4</option><option>Letter</option></select>
+          </label>
+          <label>Marks placement
+            <select data-field="marks_position">
+              <option value="right_tab">Right column</option>
+              <option value="inline">Inline [5]</option>
+              <option value="bracket">Inline (5)</option>
+            </select>
+          </label>
+          <label>Margin (in)<input data-field="margin_in" type="number" step="0.1" min="0.3" max="2" /></label>
+        </div>
+        <div class="checks">
+          <label class="chk"><input type="checkbox" data-field="show_marks_column" /> <span>Show marks column</span></label>
+          <label class="chk"><input type="checkbox" data-field="renumber_questions" /> <span>Renumber questions automatically</span></label>
+          <label class="chk"><input type="checkbox" data-field="include_options" /> <span>Include answer options</span></label>
+          <label class="chk"><input type="checkbox" data-field="normalize_devanagari" /> <span>Normalise Devanagari (NFC + nukta)</span></label>
+          <label class="chk"><input type="checkbox" data-field="prefer_precomposed_nukta" /> <span>Use pre-composed nukta (क़)</span></label>
+          <label class="chk"><input type="checkbox" data-field="convert_devanagari_digits" /> <span>Convert ०१२ → 012</span></label>
+          <label class="chk"><input type="checkbox" data-field="devanagari_danda_to_period" /> <span>Convert । → .</span></label>
+        </div>
+        <button id="btn-save-settings" class="btn primary" type="button">Save paper details</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ══════════════════════════ Settings modal ══════════════════════════ -->
+<div class="modal-backdrop" id="settings-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-head">
+      <h2 id="settings-title">OCR engines &amp; API keys</h2>
+      <button class="icon-btn" id="settings-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-intro">
+        Pranena reads handwriting with <strong>vision language models</strong> — they are roughly
+        twice as accurate as classic OCR on handwriting, and far better on Devanagari.
+        Add a key for one or more providers; the more you add, the more the
+        engines can cross-check each other.
+      </p>
+
+      <div id="provider-list" class="provider-list"></div>
+
+      <h3>Active engines</h3>
+      <div id="engine-list" class="engine-list"></div>
+      <p class="muted small">
+        Engine keys are kept in the running server process and never written to disk.
+      </p>
+    </div>
+    <div class="modal-foot">
+      <button id="settings-save" class="btn primary" type="button">Save &amp; close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ Toasts ══════════════════════════ -->
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<!-- ══════════════════════════ Busy overlay ══════════════════════════ -->
+<div id="busy" class="busy" hidden>
+  <div class="busy-card">
+    <div class="spinner" aria-hidden="true"></div>
+    <div class="busy-text">
+      <strong id="busy-title">Working…</strong>
+      <span id="busy-sub">Please wait</span>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

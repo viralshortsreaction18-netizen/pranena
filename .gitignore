@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (frontend smoke test only)
+node_modules/
+package-lock.json
+
+# Application data: uploaded page images, persisted documents, exports
+data/
+*.docx
+!docs/*.docx
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
