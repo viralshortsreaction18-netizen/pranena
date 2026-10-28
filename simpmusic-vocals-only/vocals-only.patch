@@ -1987,7 +1987,7 @@ index 0000000..37fd877
 +}
 diff --git a/core-patch/media/media3/src/main/java/com/maxrave/media3/audio/MdxVocalExtractor.kt b/core-patch/media/media3/src/main/java/com/maxrave/media3/audio/MdxVocalExtractor.kt
 new file mode 100644
-index 0000000..d0a0771
+index 0000000..a517178
 --- /dev/null
 +++ b/core-patch/media/media3/src/main/java/com/maxrave/media3/audio/MdxVocalExtractor.kt
 @@ -0,0 +1,438 @@
@@ -2035,7 +2035,7 @@ index 0000000..d0a0771
 +
 +    /** Symmetric Hann over one chunk, the overlap-add taper (numpy's `np.hanning(chunk)`). */
 +    private val chunkWindow =
-+        FloatArray(CHUNK) { 0.5f - 0.5f * cos(2.0 * PI.toFloat() * it / (CHUNK - 1).toFloat()) }
++        FloatArray(CHUNK) { (0.5 - 0.5 * cos(2.0 * PI * it / (CHUNK - 1))).toFloat() }
 +
 +    /** Incoming mix, front-padded with [HALF_FRAME] zeros like the reference implementation. */
 +    private val mixL = FloatArray(CHUNK)
