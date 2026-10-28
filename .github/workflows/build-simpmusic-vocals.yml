@@ -14,6 +14,9 @@ on:
 permissions:
   contents: write
 
+env:
+  GH_TOKEN: ${{ github.token }}
+
 concurrency:
   group: simpmusic-vocals-${{ github.ref }}
   cancel-in-progress: true
@@ -64,13 +67,21 @@ jobs:
       - name: Export library definitions
         run: cd simpmusic && ./gradlew exportLibraryDefinitions --stacktrace --no-daemon
 
+      - name: Compile the separator module
+        run: |
+          set -o pipefail
+          cd simpmusic
+          if ! ./gradlew :media3:compileReleaseKotlin --stacktrace --no-daemon 2>&1 | tee compile.log; then
+            "$GITHUB_WORKSPACE/.github/scripts/report-failure.sh" compile.log
+            exit 1
+          fi
+
       - name: Build release APK
         run: |
           set -o pipefail
           cd simpmusic
           if ! ./gradlew androidApp:assembleRelease --stacktrace --no-daemon 2>&1 | tee build.log; then
-            echo "--- gradle errors ---"
-            grep -E "(^e: |^w: .*error|FAILURE:|What went wrong:|^> )" build.log | tail -n 40 || true
+            "$GITHUB_WORKSPACE/.github/scripts/report-failure.sh" build.log
             exit 1
           fi
 
