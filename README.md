@@ -40,7 +40,18 @@ python3 .claude/skills/replica-launch/listing.py replica/launch/listing.json
 
 ```bash
 python3 -m unittest discover -s .claude/skills/tests   # 55 tool tests pass
+python3 tools/vocals/mdx_pipeline_prototype.py         # DSP reference check (needs numpy)
 ```
 
 The pack's two packaging tests (`test_repo.py`) expect the upstream plugin manifest and
 pack README at the repo root; they are expected to fail here and do not affect the skills.
+
+## SimpMusic vocals-only
+
+`simpmusic-vocals-only/` holds the fix for the SimpMusic "vocals only" mode: the
+filter bank that never loaded a model is replaced with on-device MDX-Net
+(`Kim_Vocal_2.onnx`) plus a bleed suppressor. See that folder's README.
+
+`tools/vocals/mdx_pipeline_prototype.py` is the numpy reference the Kotlin was ported
+from — it verifies the 6144-point mixed-radix FFT, the STFT/iSTFT round trip and the
+chunk overlap-add before any of it went into the app.
