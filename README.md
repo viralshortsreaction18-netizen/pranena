@@ -55,3 +55,9 @@ filter bank that never loaded a model is replaced with on-device MDX-Net
 `tools/vocals/mdx_pipeline_prototype.py` is the numpy reference the Kotlin was ported
 from — it verifies the 6144-point mixed-radix FFT, the STFT/iSTFT round trip and the
 chunk overlap-add before any of it went into the app.
+
+### APK with the vocals-only fix
+
+`.github/workflows/build-simpmusic-vocals.yml` builds it from your SimpMusic fork and
+publishes it at
+[releases/tag/simpmusic-vocals-only](https://github.com/viralshortsreaction18-netizen/pranena/releases/tag/simpmusic-vocals-only).
