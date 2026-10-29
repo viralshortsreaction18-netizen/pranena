@@ -60,6 +60,6 @@ chunk overlap-add before any of it went into the app.
 
 `.github/workflows/build-simpmusic-vocals.yml` builds it from your SimpMusic fork and
 publishes it at
-[releases/tag/simpmusic-vocals-only-v3](https://github.com/viralshortsreaction18-netizen/pranena/releases/tag/simpmusic-vocals-only-v3)
+[releases/tag/simpmusic-vocals-only-v4](https://github.com/viralshortsreaction18-netizen/pranena/releases/tag/simpmusic-vocals-only-v4)
 (arm64, armeabi-v7a, universal). The v1 crash — R8 stripping ONNX Runtime's JNI
 classes — and its fix are documented in `simpmusic-vocals-only/README.md`.

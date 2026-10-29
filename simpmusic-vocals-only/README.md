@@ -66,58 +66,32 @@ What this proves: the FFT, the frame count, the chunk/overlap-add arithmetic and
 mask application are correct. What it cannot prove: how the model sounds on your
 phone, and whether a given phone keeps up in real time (see *Known limits*).
 
-## The APK (v3 — diagnostics)
+## The APK (v4 — dynamic shape & self-test)
 
-**Download:** https://github.com/viralshortsreaction18-netizen/pranena/releases/tag/simpmusic-vocals-only-v3
+**Download:** https://github.com/viralshortsreaction18-netizen/pranena/releases/tag/simpmusic-vocals-only-v4
 
 | file | use |
 | --- | --- |
-| `SimpMusic-vocals-only-arm64-v8a.apk` | almost every phone made since ~2017 |
-| `SimpMusic-vocals-only-armeabi-v7a.apk` | older 32-bit phones |
-| `SimpMusic-vocals-only-universal.apk` | if you are not sure |
+| `SimpMusic-vocals-only-arm64-v8a.apk` | almost every phone made since ~2017 (32 MB) |
+| `SimpMusic-vocals-only-armeabi-v7a.apk` | older 32-bit phones (32 MB) |
+| `SimpMusic-vocals-only-universal.apk` | if you are not sure (72 MB, all ABIs) |
 | `SimpMusic-vocals-only-x86_64.apk` | emulators |
 
-Uninstall the previous SimpMusic first (different signing key).
+Uninstall the previous SimpMusic first before installing this APK.
 
-### If it crashes, this build will tell us why
+### What caused "vocals only could not separate this song: ort exception ort_in..."
 
-v3 writes a running record of the vocals-only path. After a crash, **reopen the app** and get the
-record one of these ways:
+The crash from earlier was resolved in v2/v3 (app no longer exits), but the separation step failed inside ONNX Runtime with an `ORT_INVALID_ARGUMENT` or `ORT_INVALID_PROTOBUF` error:
 
-1. **Settings → Developer option → App log** — export/share it (the `VocalsOnly` tag has the trail).
-2. A file manager, no root: `Android/data/com.maxrave.simpmusic/files/vocals-only.txt`
-3. The crash screen itself (the app shows one) — tap *Show error details* and share that text.
+1. **Shape mismatch**: The model dimensions were previously hard-coded to `[1, 4, 2048, 256]`. The ONNX graph declares its own dimensions; feeding a mismatched dimension causes ONNX Runtime to fail inference with `ORT_INVALID_ARGUMENT`.
+2. **Corrupted/incomplete download**: If the model download stopped prematurely, attempting to parse the protobuf causes `ORT_INVALID_PROTOBUF`.
 
-Send whichever you have. The last line names the operation that was running when the process died:
+### What changed in v4
 
-| last line | meaning |
-| --- | --- |
-| `STEP configured: …` then nothing | the audio chain rejected the format |
-| `model not ready yet; state=Downloading` | model still coming down; the crash is elsewhere |
-| `Opening session …` | died inside ONNX Runtime's session build (native memory) |
-| `chunk 0: running the model` | died inside native inference |
-| `CRASH uncaught …` + stack | a Java-level failure with the exact class and message |
-
-### What changed in v3
-
-* Uncaught exception handler → full stack trace into the app log and both files above.
-* Staged logging: toggle, model state, download, session load, and per-chunk
-  `analyse → model → synthesise` with inference timing, all logged *before* the step runs so a
-  native abort still leaves a trail.
-* Free-RAM guard: the 64 MB session is refused below ~700 MB free with a message, instead of
-  letting the native allocator kill the process.
-* One separation engine per process. Every ExoPlayer instance used to build its own 28 MB
-  extractor and run its own inference.
-
-### Fixed in v2 and kept
-
-* R8 keep rules for `ai.onnxruntime.**` (the release build shrinks; ORT resolves its JNI classes by
-  name) and `-dontwarn`.
-* `Throwable` catches on every entry point: a separation failure toasts and falls back to normal
-  playback instead of closing the app.
-* Model download and session build on worker threads, never on the audio thread.
-* `android:largeHeap`, ~28 MB extractor instead of ~44 MB, ORT `BASIC_OPT` with memory patterns off.
-* CI fails if the APK has no onnxruntime native library, and publishes every ABI.
+* **Dynamic dimension detection**: The model's declared input shape is parsed directly from the session. Extractor buffers (`FloatArray`, STFT bins, chunk sizes) are dynamically sized to match the model's dimensions.
+* **Fallback shape probe (`selfTest()`)**: On model load, a self-test runs silent inference. If the declared shape is rejected, it tests MDX-Net candidate dimensions (`2048x256`, `3072x256`, `2048x128`, `3072x128`) and locks onto the compatible configuration.
+* **Exact file verification & auto-heal**: The downloaded ONNX file is validated against the exact expected size (66,759,214 bytes). If corrupted or incomplete, it is deleted and re-downloaded automatically.
+* **Detailed diagnostic logging**: Model input/output descriptions and exact ONNX status codes are captured in `files/vocals-only.txt` and Settings → Developer option → App log.
 
 ## How it was built without write access to the fork
 
