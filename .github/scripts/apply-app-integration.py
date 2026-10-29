@@ -14,6 +14,7 @@ build applies them here and prints what it changed:
    held by native code, inside an app that is already showing Compose artwork.
 """
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -28,6 +29,39 @@ PROGUARD_RULES = """
 -keepclassmembers class ai.onnxruntime.** { <fields>; <methods>; }
 -dontwarn ai.onnxruntime.**
 """
+
+
+def app_overlay() -> None:
+    """Copies app-overlay/ into the checkout (it is beside this repo's simpmusic folder)."""
+    overlay = Path(__file__).resolve().parents[2] / "simpmusic-vocals-only" / "app-overlay"
+    if not overlay.is_dir():
+        print(f"[warn] no app overlay at {overlay}")
+        return
+    copied = 0
+    for source in overlay.rglob("*"):
+        if not source.is_file():
+            continue
+        target = ROOT / source.relative_to(overlay)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        copied += 1
+        print(f"[ok] {target.relative_to(ROOT)}")
+    print(f"[ok] copied {copied} app overlay file(s)")
+
+
+def install_diagnostics() -> None:
+    """Hooks the crash recorder into Application.onCreate, right after file logging starts."""
+    path = ROOT / "androidApp" / "src" / "main" / "java" / "com" / "maxrave" / "simpmusic" / "SimpMusicApplication.kt"
+    text = path.read_text()
+    if "VocalsOnlyDiagnostics.install" in text:
+        print(f"[ok] {path} already installs diagnostics")
+        return
+    anchor = 'Logger.enableFileLogging(File(filesDir, "logs").path)'
+    if anchor not in text:
+        raise SystemExit("could not find the file-logging line in SimpMusicApplication")
+    text = text.replace(anchor, anchor + "\n        VocalsOnlyDiagnostics.install(this)", 1)
+    path.write_text(text)
+    print(f"[ok] installed VocalsOnlyDiagnostics in {path}")
 
 
 def keep_rules() -> None:
@@ -59,5 +93,7 @@ def large_heap() -> None:
     print(f"[ok] added android:largeHeap to {path}")
 
 
+app_overlay()
+install_diagnostics()
 keep_rules()
 large_heap()

@@ -1,5 +1,6 @@
 package com.maxrave.media3.audio
 
+import com.maxrave.logger.Logger
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -158,9 +159,19 @@ internal class MdxVocalExtractor(
         return count
     }
 
+    /** Counts chunks so the log can show progress without flooding. */
+    private var chunkIndex = 0
+
     private fun processChunk() {
+        val index = chunkIndex++
+        // Logged before the work so a native abort during inference still says how far it got.
+        Logger.d(TAG, "chunk $index: analysing")
         analyse()
-        if (!model.run(spectrum, vocal)) {
+        Logger.d(TAG, "chunk $index: running the model")
+        val started = System.currentTimeMillis()
+        val ok = model.run(spectrum, vocal)
+        Logger.d(TAG, "chunk $index: model ${if (ok) "done" else "failed"} in ${System.currentTimeMillis() - started} ms")
+        if (!ok) {
             // The model refused this chunk. Hand back the mix rather than silence so the song keeps
             // playing, and remember why so the user can be told once.
             lastError = model.lastError
@@ -168,6 +179,7 @@ internal class MdxVocalExtractor(
         } else {
             suppressBleed()
         }
+        Logger.d(TAG, "chunk $index: synthesising")
         synthesise()
         overlapAdd()
         publishStep()
@@ -360,6 +372,8 @@ internal class MdxVocalExtractor(
     }
 
     private companion object {
+        const val TAG = "MdxVocalExtractor"
+
         /** Analysis frame length, `mdx_n_fft_scale_set`. */
         const val N_FFT = 6144
 

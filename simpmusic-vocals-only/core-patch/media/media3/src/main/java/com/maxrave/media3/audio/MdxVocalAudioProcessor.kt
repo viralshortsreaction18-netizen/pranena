@@ -49,6 +49,9 @@ class MdxVocalAudioProcessor(
     /** Set when something went wrong; vocals-only stays off for the rest of the session. */
     private var disabledByError = false
 
+    /** True while this processor holds the process-wide separation slot. */
+    private var ownsEngine = false
+
     private var inLeft = FloatArray(0)
     private var inRight = FloatArray(0)
     private var outLeft = FloatArray(0)
@@ -71,6 +74,7 @@ class MdxVocalAudioProcessor(
                 channelCount = inputAudioFormat.channelCount
                 extractor = null
                 wasEnabled = false
+                Logger.i(TAG, "configured: ${inputAudioFormat.sampleRate} Hz, ${inputAudioFormat.channelCount} ch")
                 inputAudioFormat
             }
         } catch (t: Throwable) {
@@ -83,6 +87,7 @@ class MdxVocalAudioProcessor(
     }
 
     override fun onReset() {
+        releaseEngine()
         extractor = null
         inLeft = FloatArray(0)
         inRight = FloatArray(0)
@@ -102,6 +107,7 @@ class MdxVocalAudioProcessor(
                 wasEnabled = false
                 // Nothing is using the 28 MB any more; let it go.
                 extractor = null
+                releaseEngine()
             }
             passThrough(inputBuffer, start)
             return
@@ -216,8 +222,18 @@ class MdxVocalAudioProcessor(
      */
     private fun obtainExtractor(): MdxVocalExtractor? {
         extractor?.let { return it }
+
+        // The player builds more than one ExoPlayer (the main one, a precache one and, with
+        // crossfade on, a second playing one). Each would otherwise hold its own 28 MB separator
+        // and run its own inference, which is how a phone runs out of memory. The first processor
+        // to need the engine gets it; the others pass audio through untouched.
+        if (!ownsEngine && !ENGINE_OWNER.compareAndSet(null, this)) {
+            if (ENGINE_OWNER.get() !== this) return null
+        }
+        ownsEngine = true
         val model = VocalModelStore.readyModel()
         if (model == null) {
+            Logger.i(TAG, "model not ready yet; state=${VocalModelStore.state.value}")
             VocalModelStore.ensureModel(context)
             if (!toldAboutDownload) {
                 toldAboutDownload = true
@@ -227,7 +243,11 @@ class MdxVocalAudioProcessor(
             return null
         }
         return try {
-            MdxVocalExtractor(model).also { extractor = it }
+            Logger.i(TAG, "creating separator (${Runtime.getRuntime().maxMemory() / 1048576} MB heap max)")
+            MdxVocalExtractor(model).also {
+                extractor = it
+                Logger.i(TAG, "separator ready")
+            }
         } catch (t: Throwable) {
             reportFailure("preparing the separator", t)
             disabledByError = true
@@ -252,6 +272,13 @@ class MdxVocalAudioProcessor(
         if (!toldAboutFailure) {
             toldAboutFailure = true
             toast("Vocals-only stopped ($message). Playback continues normally.")
+        }
+    }
+
+    private fun releaseEngine() {
+        if (ownsEngine) {
+            ENGINE_OWNER.compareAndSet(this, null)
+            ownsEngine = false
         }
     }
 
@@ -282,6 +309,9 @@ class MdxVocalAudioProcessor(
 
     private companion object {
         const val TAG = "MdxVocalAudioProcessor"
+
+        /** Which processor instance currently owns the (expensive) separation engine. */
+        val ENGINE_OWNER = java.util.concurrent.atomic.AtomicReference<MdxVocalAudioProcessor?>(null)
         const val SHORT_BYTES = 2
         const val PCM16_SCALE = 32_768.0f
         const val INV_PCM16 = 1.0f / 32_768.0f

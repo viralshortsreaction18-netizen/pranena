@@ -1,5 +1,6 @@
 package com.maxrave.media3.audio
 
+import android.app.ActivityManager
 import android.content.Context
 import com.maxrave.logger.Logger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +61,9 @@ object VocalModelStore {
 
     /** Anything smaller than this is a truncated download, not a model. */
     private const val MIN_USABLE_BYTES = 60_000_000L
+
+    /** Below this much free RAM the session build is refused rather than attempted. */
+    private const val MIN_FREE_MB = 700L
 
     private val _state = MutableStateFlow<VocalModelState>(VocalModelState.Missing)
 
@@ -122,6 +126,20 @@ object VocalModelStore {
             loader =
                 Thread({
                     try {
+                        // A 64 MB graph needs a lot more than 64 MB of native memory to open and
+                        // run. Refusing before we try is the difference between a clear message
+                        // and the native allocator killing the process.
+                        val availableMb = availableMemoryMb(context)
+                        Logger.i(TAG, "Loading vocals model; ${availableMb ?: -1} MB free, heap max ${Runtime.getRuntime().maxMemory() / 1048576} MB")
+                        if (availableMb != null && availableMb < MIN_FREE_MB) {
+                            fail(
+                                "Only $availableMb MB of memory free, and vocals-only needs about $MIN_FREE_MB MB. " +
+                                    "Close some apps and try again.",
+                                context,
+                            )
+                            return@Thread
+                        }
+                        Logger.i(TAG, "Opening session (basic optimisation, 2 threads)")
                         val model = MdxVocalModel.load(modelFile(context))
                         if (model != null) {
                             loaded = model
@@ -138,6 +156,15 @@ object VocalModelStore {
                 }
         }
     }
+
+    /** Free RAM the device has right now, or null if it cannot be read. */
+    private fun availableMemoryMb(context: Context): Long? =
+        runCatching {
+            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val info = ActivityManager.MemoryInfo()
+            manager.getMemoryInfo(info)
+            info.availMem / 1048576L
+        }.getOrNull()
 
     /** Forgets the session (it holds the file open). The file itself stays. */
     @Synchronized
@@ -167,6 +194,7 @@ object VocalModelStore {
                     instanceFollowRedirects = true
                     setRequestProperty("Accept", "application/octet-stream")
                 }
+            Logger.i(TAG, "Downloading vocals model from $DOWNLOAD_URL")
             val code = connection.responseCode
             if (code !in 200..299) {
                 fail("Download failed (HTTP $code).", context)
@@ -203,7 +231,7 @@ object VocalModelStore {
                 part.copyTo(target, overwrite = true)
                 part.delete()
             }
-            Logger.i(TAG, "Vocals model ready: ${target.length()} bytes")
+            Logger.i(TAG, "Download complete: ${target.length()} bytes")
             _state.value = VocalModelState.Ready
         } catch (t: Throwable) {
             runCatching { part.delete() }
