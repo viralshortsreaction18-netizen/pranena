@@ -20,7 +20,7 @@ sealed interface VocalModelState {
         val percent: Int,
     ) : VocalModelState
 
-    /** On disk and loaded into ONNX Runtime. */
+    /** On disk and open in ONNX Runtime. */
     data object Ready : VocalModelState
 
     /** Could not download or could not load; [message] is shown to the user. */
@@ -30,29 +30,33 @@ sealed interface VocalModelState {
 }
 
 /**
- * Owns the one file the vocal isolation needs: the MDX-Net weights.
+ * Owns the one file vocal isolation needs, and the session that runs it.
  *
- * They are far too big to ship in an APK — 64 MB against a 20 MB app — so they are fetched once, on
- * the first use of vocals-only, into the app's private storage and reused forever after. Nothing
- * leaves the device after that: separation runs on the phone, offline, no server, no API key.
+ * The weights are far too big to ship in an APK — 64 MB against a 20 MB app — so they are fetched
+ * once, on the first use of vocals-only, into the app's private storage and reused forever after.
+ * Nothing leaves the device after that: separation runs on the phone, offline, no server.
  *
- * The download is guarded twice: the byte count has to match what the release publishes, and the
- * graph has to actually open. A partial file is deleted rather than left to fail later inside the
- * audio thread.
+ * Two rules learned from the first build, which crashed the app on the audio thread:
+ *
+ * 1. **Nothing here ever blocks the audio thread.** [readyModel] only reports what a worker thread
+ *    has already finished; the download and the session build both happen off to the side.
+ * 2. **Every failure is caught and written down.** A missing native library, a full disk, a device
+ *    out of memory: [lastError] ends up in a file next to the model and in a toast, instead of a
+ *    tombstone.
  */
 object VocalModelStore {
     private const val TAG = "VocalModelStore"
 
     private const val MODEL_NAME = "Kim_Vocal_2.onnx"
 
+    private const val ERROR_FILE = "vocals-only-error.txt"
+
     /**
-     * MDX-Net `Kim_Vocal_2`, the model UVR's community rates best for vocals at this size.
+     * MDX-Net `Kim_Vocal_2`, the checkpoint UVR's community rates best for vocals at this size.
      * Published by `TRvlvr/model_repo` under `all_public_uvr_models`.
      */
     private const val DOWNLOAD_URL =
         "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Kim_Vocal_2.onnx"
-
-    private const val EXPECTED_BYTES = 66_759_214L
 
     /** Anything smaller than this is a truncated download, not a model. */
     private const val MIN_USABLE_BYTES = 60_000_000L
@@ -65,79 +69,110 @@ object VocalModelStore {
     private var downloader: Thread? = null
 
     @Volatile
+    private var loader: Thread? = null
+
+    @Volatile
     private var loaded: MdxVocalModel? = null
+
+    /** The last thing that went wrong, for the toast and for the log file. */
+    @Volatile
+    var lastError: String? = null
+        private set
 
     fun modelFile(context: Context): File = File(File(context.filesDir, "vocal-models"), MODEL_NAME)
 
-    fun isReady(context: Context): Boolean = modelFile(context).length() >= MIN_USABLE_BYTES
+    fun isReady(context: Context): Boolean = runCatching { modelFile(context).length() >= MIN_USABLE_BYTES }.getOrDefault(false)
 
-    /** The session, opened once per process. Blocking on first call: it reads 64 MB off disk. */
-    @Synchronized
-    fun model(
-        context: Context,
-        threads: Int = 4,
-    ): MdxVocalModel? {
-        loaded?.let { return it }
-        if (!isReady(context)) {
-            if (_state.value !is VocalModelState.Downloading) _state.value = VocalModelState.Missing
-            return null
+    /** The session if a worker has already opened it, else null. Never blocks, never loads. */
+    fun readyModel(): MdxVocalModel? = loaded
+
+    /**
+     * Kicks off the download and then the session build, in the background, once. Safe to call from
+     * any thread, including the audio thread, any number of times.
+     */
+    fun ensureModel(context: Context) {
+        if (loaded != null) return
+        val appContext = context.applicationContext
+        if (isReady(appContext)) {
+            _state.value = VocalModelState.Ready
+            loadInBackground(appContext)
+            return
         }
-        val model = MdxVocalModel.load(modelFile(context), threads)
-        if (model == null) {
-            _state.value = VocalModelState.Failed("The vocals model would not load. Delete it and download again.")
-            return null
+        if (downloader?.isAlive == true) return
+        synchronized(this) {
+            if (downloader?.isAlive == true) return
+            _state.value = VocalModelState.Downloading(0)
+            downloader =
+                Thread({
+                    download(appContext)
+                    if (isReady(appContext)) loadInBackground(appContext)
+                }, "vocal-model-download").apply {
+                    isDaemon = true
+                    priority = Thread.MIN_PRIORITY
+                    start()
+                }
         }
-        loaded = model
-        _state.value = VocalModelState.Ready
-        return model
+    }
+
+    private fun loadInBackground(context: Context) {
+        if (loaded != null) return
+        if (loader?.isAlive == true) return
+        synchronized(this) {
+            if (loaded != null || loader?.isAlive == true) return
+            loader =
+                Thread({
+                    try {
+                        val model = MdxVocalModel.load(modelFile(context))
+                        if (model != null) {
+                            loaded = model
+                            _state.value = VocalModelState.Ready
+                        } else {
+                            fail(MdxVocalModel.FAILURE_HOLDER ?: "The model would not load.", context)
+                        }
+                    } catch (t: Throwable) {
+                        fail("${t.javaClass.simpleName}: ${t.message}", context)
+                    }
+                }, "vocal-model-load").apply {
+                    isDaemon = true
+                    start()
+                }
+        }
     }
 
     /** Forgets the session (it holds the file open). The file itself stays. */
     @Synchronized
     fun release() {
-        loaded?.close()
+        runCatching { loaded?.close() }
         loaded = null
     }
 
-    /** Starts the one-time download if it is not already running or done. */
-    @Synchronized
-    fun ensureModel(context: Context) {
-        if (isReady(context)) {
-            _state.value = VocalModelState.Ready
-            return
-        }
-        if (downloader?.isAlive == true) return
-
-        val appContext = context.applicationContext
-        _state.value = VocalModelState.Downloading(0)
-        downloader =
-            Thread({
-                download(appContext)
-            }, "vocal-model-download").apply {
-                isDaemon = true
-                start()
-            }
+    /** Deletes a model that will not load, so the next attempt downloads it again. */
+    fun discardBrokenModel(context: Context) {
+        release()
+        runCatching { modelFile(context).delete() }
+        _state.value = VocalModelState.Missing
     }
 
     private fun download(context: Context) {
         val target = modelFile(context)
         val part = File(target.parentFile, "$MODEL_NAME.part")
-        target.parentFile?.mkdirs()
+        runCatching { target.parentFile?.mkdirs() }
 
         var connection: HttpURLConnection? = null
         try {
-            connection = (URL(DOWNLOAD_URL).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 20_000
-                readTimeout = 30_000
-                instanceFollowRedirects = true
-                setRequestProperty("Accept", "application/octet-stream")
-            }
+            connection =
+                (URL(DOWNLOAD_URL).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 20_000
+                    readTimeout = 30_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("Accept", "application/octet-stream")
+                }
             val code = connection.responseCode
             if (code !in 200..299) {
-                fail("Download failed (HTTP $code).")
+                fail("Download failed (HTTP $code).", context)
                 return
             }
-            val total = if (connection.contentLengthLong > 0) connection.contentLengthLong else EXPECTED_BYTES
+            val total = if (connection.contentLengthLong > 0) connection.contentLengthLong else 1L
             var copied = 0L
             var lastPercent = -1
 
@@ -161,7 +196,7 @@ object VocalModelStore {
 
             if (copied < MIN_USABLE_BYTES) {
                 part.delete()
-                fail("The download stopped early ($copied bytes). Check the connection and try again.")
+                fail("The download stopped early ($copied bytes). Check the connection and try again.", context)
                 return
             }
             if (!part.renameTo(target)) {
@@ -170,16 +205,28 @@ object VocalModelStore {
             }
             Logger.i(TAG, "Vocals model ready: ${target.length()} bytes")
             _state.value = VocalModelState.Ready
-        } catch (e: Exception) {
-            part.delete()
-            Logger.e(TAG, "Vocals model download failed: ${e.message}")
-            fail(e.message ?: "Download failed.")
+        } catch (t: Throwable) {
+            runCatching { part.delete() }
+            fail("${t.javaClass.simpleName}: ${t.message}", context)
         } finally {
             runCatching { connection?.disconnect() }
         }
     }
 
-    private fun fail(message: String) {
+    private fun fail(
+        message: String,
+        context: Context? = null,
+    ) {
+        lastError = message
         _state.value = VocalModelState.Failed(message)
+        Logger.e(TAG, "Vocals model unavailable: $message")
+        // Written next to the model so a bug report can carry the actual reason rather than
+        // "it crashed".
+        if (context != null) {
+            runCatching {
+                val file = File(context.filesDir, ERROR_FILE)
+                file.writeText("$message\n")
+            }
+        }
     }
 }

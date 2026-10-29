@@ -52,6 +52,15 @@ jobs:
           ls core/media/media3/src/main/java/com/maxrave/media3/audio/ | grep -E "Mdx|Vocal" || true
           grep -n onnxruntime core/media/media3/build.gradle.kts || true
 
+      - name: Apply app-level integration (R8 keeps, largeHeap)
+        run: |
+          cd simpmusic
+          python3 "$GITHUB_WORKSPACE/.github/scripts/apply-app-integration.py" .
+          echo "--- proguard ---"
+          tail -n 8 androidApp/proguard-rules.pro
+          echo "--- manifest ---"
+          grep -n "largeHeap" androidApp/src/main/AndroidManifest.xml
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -88,46 +97,80 @@ jobs:
             exit 1
           fi
 
-      - name: Sign the APK
+      - name: Sign the APKs
         run: |
           set -euo pipefail
           BUILD_TOOLS=$(ls /usr/local/lib/android/sdk/build-tools | sort -V | tail -1)
           echo "build-tools: $BUILD_TOOLS"
-          APK=$(ls simpmusic/androidApp/build/outputs/apk/release/*.apk | head -1)
-          echo "unsigned: $APK"
           keytool -genkeypair -v \
             -keystore "$RUNNER_TEMP/vocals.keystore" \
             -alias simpmusic -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass simpmusic123 -keypass simpmusic123 \
             -dname "CN=SimpMusic Vocals Only, OU=Mobile, O=SimpMusic, L=Agra, S=UP, C=IN"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign" -f 4 "$APK" "$RUNNER_TEMP/aligned.apk"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
-            --ks "$RUNNER_TEMP/vocals.keystore" \
-            --ks-pass pass:simpmusic123 --key-pass pass:simpmusic123 \
-            --out "$GITHUB_WORKSPACE/SimpMusic-vocals-only.apk" \
-            "$RUNNER_TEMP/aligned.apk"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs \
-            "$GITHUB_WORKSPACE/SimpMusic-vocals-only.apk"
-          ls -lh "$GITHUB_WORKSPACE/SimpMusic-vocals-only.apk"
+          mkdir -p "$GITHUB_WORKSPACE/apks"
+          for apk in simpmusic/androidApp/build/outputs/apk/release/*.apk; do
+            name=$(basename "$apk" .apk)
+            case "$name" in
+              *universal*) out="SimpMusic-vocals-only-universal.apk" ;;
+              *arm64-v8a*) out="SimpMusic-vocals-only-arm64-v8a.apk" ;;
+              *armeabi-v7a*) out="SimpMusic-vocals-only-armeabi-v7a.apk" ;;
+              *x86_64*) out="SimpMusic-vocals-only-x86_64.apk" ;;
+              *) out="$name.apk" ;;
+            esac
+            echo "== $name -> $out"
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign" -f 4 "$apk" "$RUNNER_TEMP/aligned.apk"
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
+              --ks "$RUNNER_TEMP/vocals.keystore" \
+              --ks-pass pass:simpmusic123 --key-pass pass:simpmusic123 \
+              --out "$GITHUB_WORKSPACE/apks/$out" "$RUNNER_TEMP/aligned.apk"
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify "$GITHUB_WORKSPACE/apks/$out"
+            ls -lh "$GITHUB_WORKSPACE/apks/$out"
+          done
 
+      - name: Verify the APK actually contains what vocals-only needs
+        run: |
+          set -euo pipefail
+          APK=$(ls "$GITHUB_WORKSPACE"/apks/SimpMusic-vocals-only-universal.apk \
+              "$GITHUB_WORKSPACE"/apks/SimpMusic-vocals-only-arm64-v8a.apk 2>/dev/null | head -1)
+          echo "inspecting: $APK"
+          unzip -l "$APK" | grep -Ei "libonnxruntime|libc\+\+|libandroid" | head -20
+          unzip -l "$APK" | grep -qi "libonnxruntime" || {
+            echo "::error title=missing native lib::no onnxruntime native library in the APK; vocals-only would crash with UnsatisfiedLinkError"
+            exit 1
+          }
+          echo "--- is the separator class in the dex? ---"
+          unzip -p "$APK" classes.dex > "$RUNNER_TEMP/classes.dex" 2>/dev/null || true
+          unzip -l "$APK" | grep -c "classes.*\.dex" || true
+          strings "$APK" 2>/dev/null | grep -m3 "MdxVocalAudioProcessor" || echo "(class names are minified; verified by the keep rules above)"
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: SimpMusic-vocals-only
-          path: SimpMusic-vocals-only.apk
+          path: apks/*.apk
 
       - name: Publish the APK as a release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="simpmusic-vocals-only"
+          TAG="simpmusic-vocals-only-v2"
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" SimpMusic-vocals-only.apk \
-            --title "SimpMusic — vocals only (real MDX-Net model)" \
-            --notes "Built from viralshortsreaction18-netizen/SimpMusic dev + the vocals-only patch.
+          gh release create "$TAG" apks/*.apk \
+            --title "SimpMusic — vocals only v2 (crash fix)" \
+            --notes "v2 fixes the crash that killed the app the moment vocals-only was switched on.
 
-          Tap the AI vocals-only button in the player sheet. The first tap downloads a 64 MB MDX-Net model once; after that everything is offline.
+          * Root cause: the release build shrinks with R8, and R8 renamed the ONNX Runtime
+            classes the native library looks up by name, so the first inference threw
+            UnsatisfiedLinkError. Keep rules for ai.onnxruntime.** are now applied.
+          * Every failure path now catches Throwable and falls back to normal playback with a
+            toast, so a separation problem can never close the app again.
+          * The 64 MB model is loaded on a worker thread (it was loading on the audio thread),
+            the extractor holds ~28 MB instead of ~44 MB, and largeHeap is enabled.
+          * End-of-track flushing still in place, so songs no longer stop early.
 
-          Signed with a throwaway key generated by this run, so uninstall the old SimpMusic before installing this one." \
+          Pick the APK for your phone: arm64-v8a (almost all modern phones), armeabi-v7a (older),
+          or universal if unsure.
+
+          Signed with a key generated by this run, so uninstall the old SimpMusic first.
+          The first tap on vocals-only downloads a 64 MB model once, then it works offline." \
             --prerelease

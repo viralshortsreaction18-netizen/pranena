@@ -9,6 +9,7 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import com.maxrave.logger.Logger
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.roundToInt
@@ -19,12 +20,18 @@ import kotlin.math.roundToInt
  *
  * Sits in the chain ahead of the equalizer so the EQ shapes the isolated voice, and follows the same
  * contract as [EqualizerAudioProcessor]: [enabled] is sampled on every buffer, so flipping the
- * toggle takes effect on the next few seconds of audio rather than on the next track.
+ * toggle takes effect within a few seconds rather than on the next track.
  *
- * The model needs 44.1 kHz, which is what the models were trained on. The chain puts a
- * `SonicAudioProcessor` ahead of this one for exactly that reason; if a stream still arrives at
- * another rate, this processor declines to activate and the audio plays untouched instead of being
- * separated at the wrong frequency scale.
+ * Three rules, all of them learned from the build that crashed:
+ *
+ * 1. **Nothing here may throw.** Every entry point catches `Throwable` — not just `Exception`,
+ *    because the failures that killed the app were an `OutOfMemoryError` or a missing native
+ *    library, and those are `Error`s. On failure the processor stops isolating for the rest of the
+ *    session and passes audio through untouched.
+ * 2. **Nothing here may block on the model.** Loading 64 MB of weights happens on a worker thread
+ *    in [VocalModelStore]; this class only ever asks whether it is already done.
+ * 3. **Nothing here holds memory it is not using.** The extractor is ~28 MB and is dropped the
+ *    moment vocals-only is switched off.
  */
 @UnstableApi
 class MdxVocalAudioProcessor(
@@ -37,33 +44,42 @@ class MdxVocalAudioProcessor(
     private var wasEnabled = false
     private var toldAboutDownload = false
     private var toldAboutOtherRate = false
+    private var toldAboutFailure = false
+
+    /** Set when something went wrong; vocals-only stays off for the rest of the session. */
+    private var disabledByError = false
 
     private var inLeft = FloatArray(0)
     private var inRight = FloatArray(0)
     private var outLeft = FloatArray(0)
     private var outRight = FloatArray(0)
 
-    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) return AudioProcessor.AudioFormat.NOT_SET
-        if (inputAudioFormat.channelCount != 1 && inputAudioFormat.channelCount != 2) {
-            return AudioProcessor.AudioFormat.NOT_SET
-        }
-        if (inputAudioFormat.sampleRate != MODEL_SAMPLE_RATE) {
-            if (!toldAboutOtherRate) {
-                toldAboutOtherRate = true
-                Logger.w("MdxVocalAudioProcessor", "Vocals only needs ${MODEL_SAMPLE_RATE} Hz, got ${inputAudioFormat.sampleRate}; passing audio through.")
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat =
+        try {
+            if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
+                AudioProcessor.AudioFormat.NOT_SET
+            } else if (inputAudioFormat.channelCount != 1 && inputAudioFormat.channelCount != 2) {
+                AudioProcessor.AudioFormat.NOT_SET
+            } else if (inputAudioFormat.sampleRate != MODEL_SAMPLE_RATE) {
+                if (!toldAboutOtherRate) {
+                    toldAboutOtherRate = true
+                    Logger.w(TAG, "Vocals only needs $MODEL_SAMPLE_RATE Hz, got ${inputAudioFormat.sampleRate}")
+                }
+                AudioProcessor.AudioFormat.NOT_SET
+            } else {
+                sampleRate = inputAudioFormat.sampleRate
+                channelCount = inputAudioFormat.channelCount
+                extractor = null
+                wasEnabled = false
+                inputAudioFormat
             }
-            return AudioProcessor.AudioFormat.NOT_SET
+        } catch (t: Throwable) {
+            reportFailure("configure", t)
+            AudioProcessor.AudioFormat.NOT_SET
         }
-        sampleRate = inputAudioFormat.sampleRate
-        channelCount = inputAudioFormat.channelCount
-        extractor = null
-        wasEnabled = false
-        return inputAudioFormat
-    }
 
     override fun onFlush() {
-        extractor?.flush()
+        runCatching { extractor?.flush() }
     }
 
     override fun onReset() {
@@ -78,46 +94,55 @@ class MdxVocalAudioProcessor(
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
-        val remaining = inputBuffer.remaining()
-        if (remaining == 0) return
-
-        val current = if (enabled()) obtainExtractor() else null
+        val start = inputBuffer.position()
+        val current = if (enabled() && !disabledByError) obtainExtractor() else null
         if (current == null) {
             if (wasEnabled) {
                 extractor?.flush()
                 wasEnabled = false
+                // Nothing is using the 28 MB any more; let it go.
+                extractor = null
             }
-            val output = replaceOutputBuffer(remaining)
-            output.put(inputBuffer)
-            output.flip()
-            return
-        }
-        wasEnabled = true
-
-        inputBuffer.order(ByteOrder.nativeOrder())
-        val bytesPerFrame = channelCount * SHORT_BYTES
-        val frameCount = remaining / bytesPerFrame
-        if (frameCount <= 0) {
-            inputBuffer.position(inputBuffer.limit())
+            passThrough(inputBuffer, start)
             return
         }
 
-        ensureScratchCapacity(frameCount)
-        if (channelCount == 2) {
-            for (i in 0 until frameCount) {
-                inLeft[i] = inputBuffer.short * INV_PCM16
-                inRight[i] = inputBuffer.short * INV_PCM16
+        try {
+            wasEnabled = true
+            inputBuffer.order(ByteOrder.nativeOrder())
+            val bytesPerFrame = channelCount * SHORT_BYTES
+            val frameCount = inputBuffer.remaining() / bytesPerFrame
+            if (frameCount <= 0) {
+                inputBuffer.position(inputBuffer.limit())
+                return
             }
-        } else {
-            for (i in 0 until frameCount) {
-                val sample = inputBuffer.short * INV_PCM16
-                inLeft[i] = sample
-                inRight[i] = sample
-            }
-        }
 
-        current.writeStereo(inLeft, inRight, 0, frameCount)
-        writeAvailable(current, makeRoom = true)
+            ensureScratchCapacity(frameCount)
+            if (channelCount == 2) {
+                for (i in 0 until frameCount) {
+                    inLeft[i] = inputBuffer.short * INV_PCM16
+                    inRight[i] = inputBuffer.short * INV_PCM16
+                }
+            } else {
+                for (i in 0 until frameCount) {
+                    val sample = inputBuffer.short * INV_PCM16
+                    inLeft[i] = sample
+                    inRight[i] = sample
+                }
+            }
+
+            current.writeStereo(inLeft, inRight, 0, frameCount)
+            current.lastError?.let { reportModelError(it) }
+            writeAvailable(current, makeRoom = true)
+        } catch (t: Throwable) {
+            // Never let the audio thread take the app with it: drop isolation and replay this
+            // buffer untouched.
+            reportFailure("separation", t)
+            disabledByError = true
+            extractor = null
+            wasEnabled = false
+            passThrough(inputBuffer, start)
+        }
     }
 
     /**
@@ -127,8 +152,32 @@ class MdxVocalAudioProcessor(
     override fun onQueueEndOfStream() {
         val current = extractor ?: return
         if (!wasEnabled) return
-        current.finish()
-        writeAvailable(current, makeRoom = false)
+        try {
+            current.finish()
+            writeAvailable(current, makeRoom = false)
+        } catch (t: Throwable) {
+            reportFailure("end of stream", t)
+            disabledByError = true
+            extractor = null
+            wasEnabled = false
+        }
+    }
+
+    private fun passThrough(
+        inputBuffer: ByteBuffer,
+        start: Int,
+    ) {
+        runCatching {
+            inputBuffer.position(start)
+            val remaining = inputBuffer.remaining()
+            if (remaining <= 0) {
+                replaceOutputBuffer(0).flip()
+                return
+            }
+            val output = replaceOutputBuffer(remaining)
+            output.put(inputBuffer)
+            output.flip()
+        }
     }
 
     private fun writeAvailable(
@@ -161,29 +210,56 @@ class MdxVocalAudioProcessor(
     }
 
     /**
-     * The extractor appears the moment the model is on disk and opened, so turning vocals-only on
-     * while the model is still downloading starts working on its own once the download lands —
-     * no need to toggle twice or restart the track.
+     * Returns the extractor only if the model is **already** loaded. If it is not, this kicks off
+     * the download/load in the background and returns null, so audio plays normally in the meantime
+     * and vocals-only starts working by itself once the model lands.
      */
     private fun obtainExtractor(): MdxVocalExtractor? {
         extractor?.let { return it }
-        if (!VocalModelStore.isReady(context)) {
+        val model = VocalModelStore.readyModel()
+        if (model == null) {
             VocalModelStore.ensureModel(context)
             if (!toldAboutDownload) {
                 toldAboutDownload = true
-                toast("Preparing vocals-only. The 64 MB model downloads once, then works offline.")
+                toast("Preparing vocals-only: downloading the 64 MB model once. It runs offline after that.")
             }
+            VocalModelStore.lastError?.let { reportModelError(it) }
             return null
         }
-        val model =
-            VocalModelStore.model(context)
-                ?: run {
-                    toast("The vocals model could not be loaded.")
-                    return null
-                }
-        val created = MdxVocalExtractor(model)
-        extractor = created
-        return created
+        return try {
+            MdxVocalExtractor(model).also { extractor = it }
+        } catch (t: Throwable) {
+            reportFailure("preparing the separator", t)
+            disabledByError = true
+            null
+        }
+    }
+
+    private fun reportModelError(message: String) {
+        if (toldAboutFailure) return
+        toldAboutFailure = true
+        toast("Vocals-only could not separate this song: $message")
+        log("model: $message")
+    }
+
+    private fun reportFailure(
+        where: String,
+        t: Throwable,
+    ) {
+        val message = "${t.javaClass.simpleName}: ${t.message}"
+        Logger.e(TAG, "Vocals-only failed at $where: $message")
+        log("$where: $message")
+        if (!toldAboutFailure) {
+            toldAboutFailure = true
+            toast("Vocals-only stopped ($message). Playback continues normally.")
+        }
+    }
+
+    /** Writes the reason to a file the user can send, not just to logcat. */
+    private fun log(message: String) {
+        runCatching {
+            File(context.filesDir, "vocals-only-error.txt").appendText("$message\n")
+        }
     }
 
     private fun toast(message: String) {
@@ -205,6 +281,7 @@ class MdxVocalAudioProcessor(
     }
 
     private companion object {
+        const val TAG = "MdxVocalAudioProcessor"
         const val SHORT_BYTES = 2
         const val PCM16_SCALE = 32_768.0f
         const val INV_PCM16 = 1.0f / 32_768.0f
