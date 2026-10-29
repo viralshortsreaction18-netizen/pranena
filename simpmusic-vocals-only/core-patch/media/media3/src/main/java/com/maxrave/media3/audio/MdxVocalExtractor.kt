@@ -12,7 +12,7 @@ import kotlin.math.min
  *
  * What it does per chunk, matching `audio-separator`'s MDX pipeline sample for sample:
  *
- * 1. window the chunk ([CHUNK] samples) with a Hann taper and pad it by [HALF_FRAME] of silence on
+ * 1. window the chunk ([chunk] samples) with a Hann taper and pad it by [HALF_FRAME] of silence on
  *    both sides, so the analysis frames line up with `torch.stft(center = true)`;
  * 2. STFT it at `n_fft = 6144`, `hop = 1024` — 256 frames, the first 2048 bins of which are handed
  *    to the model as `[1, 4, 2048, 256]`: real and imaginary parts of left and right;
@@ -26,7 +26,7 @@ import kotlin.math.min
  *    window-sum divisor, so the seams between chunks are inaudible.
  *
  * Chunks overlap by 25 %, so a chunk is only final once the one before it has been added: each pass
- * publishes [STEP] samples, and [availableFrames] reports what is ready to read.
+ * publishes [step] samples, and [availableFrames] reports what is ready to read.
  *
  * Memory matters here: an instance holds roughly 28 MB (two 8 MB spectra plus the overlap-add
  * buffers), which is why the processor drops it the moment the user turns vocals-only off rather
@@ -40,37 +40,48 @@ internal class MdxVocalExtractor(
 ) {
     private val fft = MdxFft6144()
 
+    /** What the model actually wants, read from the session rather than assumed. */
+    private val dimF = model.dimF
+    private val dimT = model.dimT
+    private val binsTotal = dimF * dimT
+    private val channelsTotal = 4 * binsTotal
+
+    /** `hop * (dim_t - 1)`: samples per model window, 5.9 s for the usual 256-frame model. */
+    private val chunk = HOP * (dimT - 1)
+    private val padded = chunk + 2 * HALF_FRAME
+    private val step = (chunk * (1.0 - OVERLAP)).toInt()
+
     /** Periodic Hann over one analysis frame, as `torch.hann_window(6144, periodic = true)`. */
     private val frameWindow = DoubleArray(N_FFT) { 0.5 - 0.5 * cos(2.0 * PI * it / N_FFT) }
 
     /** Symmetric Hann over one chunk, the overlap-add taper (numpy's `np.hanning(chunk)`). */
-    private val chunkWindow = FloatArray(CHUNK) { (0.5 - 0.5 * cos(2.0 * PI * it / (CHUNK - 1))).toFloat() }
+    private val chunkWindow = FloatArray(chunk) { (0.5 - 0.5 * cos(2.0 * PI * it / (chunk - 1))).toFloat() }
 
     /** Incoming mix, front-padded with [HALF_FRAME] zeros like the reference implementation. */
-    private val mixL = FloatArray(CHUNK)
-    private val mixR = FloatArray(CHUNK)
+    private val mixL = FloatArray(chunk)
+    private val mixR = FloatArray(chunk)
     private var mixFill = HALF_FRAME
 
     /** Inverse-STFT accumulator and its window-sum normaliser, over the padded chunk. */
-    private val accL = FloatArray(PADDED)
-    private val accR = FloatArray(PADDED)
-    private val norm = FloatArray(PADDED)
+    private val accL = FloatArray(padded)
+    private val accR = FloatArray(padded)
+    private val norm = FloatArray(padded)
 
     /** Model input and output: `[4, 2048, 256]`, channel-major, real before imaginary. */
-    private val spectrum = FloatArray(CHANNELS_TOTAL)
-    private val vocal = FloatArray(CHANNELS_TOTAL)
+    private val spectrum = FloatArray(channelsTotal)
+    private val vocal = FloatArray(channelsTotal)
 
     private val frameReal = DoubleArray(N_FFT)
     private val frameImag = DoubleArray(N_FFT)
 
     /** Overlap-add of finished chunks and its divisor. */
-    private val resultL = FloatArray(CHUNK)
-    private val resultR = FloatArray(CHUNK)
-    private val divider = FloatArray(CHUNK)
+    private val resultL = FloatArray(chunk)
+    private val resultR = FloatArray(chunk)
+    private val divider = FloatArray(chunk)
 
     /** Ready-to-read samples. */
-    private var pendingL = FloatArray(CHUNK)
-    private var pendingR = FloatArray(CHUNK)
+    private var pendingL = FloatArray(chunk)
+    private var pendingR = FloatArray(chunk)
     private var pendingHead = 0
     private var pendingTail = 0
 
@@ -101,7 +112,7 @@ internal class MdxVocalExtractor(
     }
 
     /**
-     * Accepts stereo PCM, buffering until a full [CHUNK] is available, then separates it.
+     * Accepts stereo PCM, buffering until a full [chunk] is available, then separates it.
      *
      * Runs on the thread that feeds audio, and takes as long as a chunk's model pass takes.
      */
@@ -113,7 +124,7 @@ internal class MdxVocalExtractor(
     ) {
         var read = 0
         while (read < frameCount) {
-            val room = CHUNK - mixFill
+            val room = chunk - mixFill
             if (room <= 0) {
                 processChunk()
                 continue
@@ -123,7 +134,7 @@ internal class MdxVocalExtractor(
             System.arraycopy(inRight, offset + read, mixR, mixFill, take)
             mixFill += take
             read += take
-            if (mixFill == CHUNK) processChunk()
+            if (mixFill == chunk) processChunk()
         }
     }
 
@@ -133,10 +144,10 @@ internal class MdxVocalExtractor(
      */
     fun finish() {
         repeat(TAIL_PASSES) {
-            if (mixFill < CHUNK) {
-                java.util.Arrays.fill(mixL, mixFill, CHUNK, 0f)
-                java.util.Arrays.fill(mixR, mixFill, CHUNK, 0f)
-                mixFill = CHUNK
+            if (mixFill < chunk) {
+                java.util.Arrays.fill(mixL, mixFill, chunk, 0f)
+                java.util.Arrays.fill(mixR, mixFill, chunk, 0f)
+                mixFill = chunk
             }
             processChunk()
         }
@@ -188,7 +199,7 @@ internal class MdxVocalExtractor(
     // ---- 1 and 2: window, pad, STFT ---------------------------------------------------------------
 
     private fun analyse() {
-        for (frame in 0 until DIM_T) {
+        for (frame in 0 until dimT) {
             val start = frame * HOP
             for (channel in 0 until 2) {
                 val source = if (channel == 0) mixL else mixR
@@ -197,7 +208,7 @@ internal class MdxVocalExtractor(
                     // side; indexing the source directly saves a second copy of the chunk.
                     val index = start + n - HALF_FRAME
                     val sample =
-                        if (index < 0 || index >= CHUNK) {
+                        if (index < 0 || index >= chunk) {
                             0.0
                         } else {
                             source[index].toDouble() * chunkWindow[index]
@@ -207,21 +218,21 @@ internal class MdxVocalExtractor(
                 }
                 fft.forward(frameReal, frameImag)
 
-                val base = 2 * channel * BINS_TOTAL
-                for (bin in 0 until DIM_F) {
-                    val index = bin * DIM_T + frame
+                val base = 2 * channel * binsTotal
+                for (bin in 0 until dimF) {
+                    val index = bin * dimT + frame
                     spectrum[base + index] = frameReal[bin].toFloat()
-                    spectrum[base + BINS_TOTAL + index] = frameImag[bin].toFloat()
+                    spectrum[base + binsTotal + index] = frameImag[bin].toFloat()
                 }
             }
         }
 
         // The reference pipeline zeroes the first three bins (DC to ~21 Hz) before the model.
         for (channel in 0 until 4) {
-            val base = channel * BINS_TOTAL
+            val base = channel * binsTotal
             for (bin in 0 until 3) {
-                for (frame in 0 until DIM_T) {
-                    spectrum[base + bin * DIM_T + frame] = 0f
+                for (frame in 0 until dimT) {
+                    spectrum[base + bin * dimT + frame] = 0f
                 }
             }
         }
@@ -231,9 +242,9 @@ internal class MdxVocalExtractor(
 
     private fun suppressBleed() {
         val alpha = musicSuppression.toDouble()
-        for (frame in 0 until DIM_T) {
-            for (bin in 0 until DIM_F) {
-                val index = bin * DIM_T + frame
+        for (frame in 0 until dimT) {
+            for (bin in 0 until dimF) {
+                val index = bin * dimT + frame
                 val hz = bin * HZ_PER_BIN
                 val bandGate =
                     when {
@@ -246,16 +257,16 @@ internal class MdxVocalExtractor(
                 var gain = bandGate
                 if (gain > 0.0) {
                     // Magnitude of the mix at this bin, straight from the spectrum we already have.
-                    val left = hypot(spectrum[index].toDouble(), spectrum[BINS_TOTAL + index].toDouble())
+                    val left = hypot(spectrum[index].toDouble(), spectrum[binsTotal + index].toDouble())
                     val right =
                         hypot(
-                            spectrum[2 * BINS_TOTAL + index].toDouble(),
-                            spectrum[3 * BINS_TOTAL + index].toDouble(),
+                            spectrum[2 * binsTotal + index].toDouble(),
+                            spectrum[3 * binsTotal + index].toDouble(),
                         )
                     val mixMag = max(left, right)
                     for (channel in 0 until 2) {
-                        val base = 2 * channel * BINS_TOTAL
-                        val v = hypot(vocal[base + index].toDouble(), vocal[base + BINS_TOTAL + index].toDouble())
+                        val base = 2 * channel * binsTotal
+                        val v = hypot(vocal[base + index].toDouble(), vocal[base + binsTotal + index].toDouble())
                         val music = max(0.0, mixMag - v)
                         val keep = (v * v) / (v * v + (alpha * music) * (alpha * music) + EPSILON)
                         gain = min(gain, keep)
@@ -263,9 +274,9 @@ internal class MdxVocalExtractor(
                 }
 
                 for (channel in 0 until 2) {
-                    val base = 2 * channel * BINS_TOTAL
+                    val base = 2 * channel * binsTotal
                     vocal[base + index] *= gain.toFloat()
-                    vocal[base + BINS_TOTAL + index] *= gain.toFloat()
+                    vocal[base + binsTotal + index] *= gain.toFloat()
                 }
             }
         }
@@ -278,16 +289,16 @@ internal class MdxVocalExtractor(
         java.util.Arrays.fill(accR, 0f)
         java.util.Arrays.fill(norm, 0f)
 
-        for (frame in 0 until DIM_T) {
+        for (frame in 0 until dimT) {
             val start = frame * HOP
             for (channel in 0 until 2) {
-                val base = 2 * channel * BINS_TOTAL
+                val base = 2 * channel * binsTotal
                 java.util.Arrays.fill(frameReal, 0.0)
                 java.util.Arrays.fill(frameImag, 0.0)
-                for (bin in 0 until DIM_F) {
-                    val index = bin * DIM_T + frame
+                for (bin in 0 until dimF) {
+                    val index = bin * dimT + frame
                     frameReal[bin] = vocal[base + index].toDouble()
-                    frameImag[bin] = vocal[base + BINS_TOTAL + index].toDouble()
+                    frameImag[bin] = vocal[base + binsTotal + index].toDouble()
                 }
                 // Mirror the half spectrum so the inverse transform comes back real.
                 for (bin in 1 until HALF_SPECTRUM) {
@@ -311,7 +322,7 @@ internal class MdxVocalExtractor(
 
     /** Overlap-adds the finished chunk, normalised by the inverse-STFT window sum. */
     private fun overlapAdd() {
-        for (i in 0 until CHUNK) {
+        for (i in 0 until chunk) {
             val n = norm[HALF_FRAME + i]
             val scale = if (n > 1e-9f) 1f / n else 0f
             val w = chunkWindow[i]
@@ -321,15 +332,15 @@ internal class MdxVocalExtractor(
         }
     }
 
-    /** Publishes [STEP] finished samples, then slides the overlap-add and input buffers forward. */
+    /** Publishes [step] finished samples, then slides the overlap-add and input buffers forward. */
     private fun publishStep() {
         val skip = leadingTrim
         leadingTrim = 0
-        val produced = STEP - skip
+        val produced = step - skip
         ensurePendingCapacity(produced)
 
         var written = 0
-        for (i in skip until STEP) {
+        for (i in skip until step) {
             val d = divider[i]
             val inv = if (d > 1e-6f) 1f / d else 0f
             pendingL[pendingTail + written] = resultL[i] * inv
@@ -338,16 +349,16 @@ internal class MdxVocalExtractor(
         }
         pendingTail += written
 
-        System.arraycopy(resultL, STEP, resultL, 0, CHUNK - STEP)
-        System.arraycopy(resultR, STEP, resultR, 0, CHUNK - STEP)
-        System.arraycopy(divider, STEP, divider, 0, CHUNK - STEP)
-        java.util.Arrays.fill(resultL, CHUNK - STEP, CHUNK, 0f)
-        java.util.Arrays.fill(resultR, CHUNK - STEP, CHUNK, 0f)
-        java.util.Arrays.fill(divider, CHUNK - STEP, CHUNK, 0f)
+        System.arraycopy(resultL, step, resultL, 0, chunk - step)
+        System.arraycopy(resultR, step, resultR, 0, chunk - step)
+        System.arraycopy(divider, step, divider, 0, chunk - step)
+        java.util.Arrays.fill(resultL, chunk - step, chunk, 0f)
+        java.util.Arrays.fill(resultR, chunk - step, chunk, 0f)
+        java.util.Arrays.fill(divider, chunk - step, chunk, 0f)
 
-        System.arraycopy(mixL, STEP, mixL, 0, CHUNK - STEP)
-        System.arraycopy(mixR, STEP, mixR, 0, CHUNK - STEP)
-        mixFill = CHUNK - STEP
+        System.arraycopy(mixL, step, mixL, 0, chunk - step)
+        System.arraycopy(mixR, step, mixR, 0, chunk - step)
+        mixFill = chunk - step
     }
 
     private fun ensurePendingCapacity(extra: Int) {
@@ -384,27 +395,8 @@ internal class MdxVocalExtractor(
 
         const val HALF_FRAME = N_FFT / 2
 
-        /** `mdx_dim_f_set`. */
-        const val DIM_F = MdxVocalModel.DIM_F
-
-        /** `2 ** mdx_dim_t_set`. */
-        const val DIM_T = MdxVocalModel.DIM_T
-
-        const val BINS_TOTAL = DIM_F * DIM_T
-
-        const val CHANNELS_TOTAL = 4 * BINS_TOTAL
-
-        /** `hop * (dim_t - 1)`: samples per model window, 5.9 s. */
-        const val CHUNK = HOP * (DIM_T - 1)
-
-        /** The chunk plus one frame of silence on each side, which is what the STFT sees. */
-        const val PADDED = CHUNK + 2 * HALF_FRAME
-
         /** 25 % overlap between windows. */
         const val OVERLAP = 0.25
-
-        /** Samples published per window. */
-        val STEP = (CHUNK * (1.0 - OVERLAP)).toInt()
 
         const val TAIL_PASSES = 2
 

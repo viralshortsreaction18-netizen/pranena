@@ -62,6 +62,13 @@ object VocalModelStore {
     /** Anything smaller than this is a truncated download, not a model. */
     private const val MIN_USABLE_BYTES = 60_000_000L
 
+    /** What the release publishes; a file of any other length is a truncated or wrong download. */
+    private const val EXPECTED_BYTES = 66_759_214L
+
+    /** Set after one automatic re-download, so a hopeless model does not loop. */
+    @Volatile
+    private var retriedDownload = false
+
     /** Below this much free RAM the session build is refused rather than attempted. */
     private const val MIN_FREE_MB = 700L
 
@@ -97,6 +104,15 @@ object VocalModelStore {
     fun ensureModel(context: Context) {
         if (loaded != null) return
         val appContext = context.applicationContext
+
+        // A file that failed to load or has the wrong length is deleted by the loader, but a
+        // truncated one can also arrive from an interrupted download on a previous run.
+        val file = modelFile(appContext)
+        if (file.isFile && file.length() != EXPECTED_BYTES && !downloading()) {
+            Logger.w(TAG, "Model file is ${file.length()} bytes, expected $EXPECTED_BYTES; re-downloading")
+            runCatching { file.delete() }
+        }
+
         if (isReady(appContext)) {
             _state.value = VocalModelState.Ready
             loadInBackground(appContext)
@@ -117,6 +133,8 @@ object VocalModelStore {
                 }
         }
     }
+
+    private fun downloading(): Boolean = downloader?.isAlive == true
 
     private fun loadInBackground(context: Context) {
         if (loaded != null) return
@@ -140,21 +158,55 @@ object VocalModelStore {
                             return@Thread
                         }
                         Logger.i(TAG, "Opening session (basic optimisation, 2 threads)")
-                        val model = MdxVocalModel.load(modelFile(context))
+                        val model = MdxVocalModel.load(modelFile(context))?.also { candidate ->
+                            val problem = candidate.selfTest()
+                            if (problem != null) {
+                                Logger.e(TAG, "Model failed its self-test: $problem (${candidate.description})")
+                                runCatching { candidate.close() }
+                                throw IllegalStateException("Self-test failed: $problem")
+                            }
+                            Logger.i(TAG, "Model self-test passed: ${candidate.description}")
+                        }
                         if (model != null) {
                             loaded = model
                             _state.value = VocalModelState.Ready
                         } else {
-                            fail(MdxVocalModel.FAILURE_HOLDER ?: "The model would not load.", context)
+                            val reason = MdxVocalModel.FAILURE_HOLDER ?: "The model would not load."
+                            handleUnusableModel(context, reason)
                         }
                     } catch (t: Throwable) {
-                        fail("${t.javaClass.simpleName}: ${t.message}", context)
+                        handleUnusableModel(context, "${t.javaClass.simpleName}: ${t.message}")
                     }
                 }, "vocal-model-load").apply {
                     isDaemon = true
                     start()
                 }
         }
+    }
+
+    /**
+     * The file is there but cannot be used — corrupt, truncated, or a graph this device refuses.
+     * Delete it and let one automatic re-download happen, then report the reason if that fails too.
+     */
+    private fun handleUnusableModel(
+        context: Context,
+        reason: String,
+    ) {
+        runCatching { modelFile(context).delete() }
+        if (!retriedDownload) {
+            retriedDownload = true
+            Logger.w(TAG, "Re-downloading the vocals model once after: $reason")
+            _state.value = VocalModelState.Downloading(0)
+            Thread({
+                download(context)
+                if (isReady(context)) loadInBackground(context)
+            }, "vocal-model-redownload").apply {
+                isDaemon = true
+                start()
+            }
+            return
+        }
+        fail("The vocals model could not be used: $reason", context)
     }
 
     /** Free RAM the device has right now, or null if it cannot be read. */
@@ -222,16 +274,16 @@ object VocalModelStore {
                 }
             }
 
-            if (copied < MIN_USABLE_BYTES) {
+            if (copied < MIN_USABLE_BYTES || (total > MIN_USABLE_BYTES && copied != total)) {
                 part.delete()
-                fail("The download stopped early ($copied bytes). Check the connection and try again.", context)
+                fail("The download stopped early ($copied of $total bytes). Check the connection and try again.", context)
                 return
             }
             if (!part.renameTo(target)) {
                 part.copyTo(target, overwrite = true)
                 part.delete()
             }
-            Logger.i(TAG, "Download complete: ${target.length()} bytes")
+            Logger.i(TAG, "Download complete: ${target.length()} bytes (expected $EXPECTED_BYTES)")
             _state.value = VocalModelState.Ready
         } catch (t: Throwable) {
             runCatching { part.delete() }

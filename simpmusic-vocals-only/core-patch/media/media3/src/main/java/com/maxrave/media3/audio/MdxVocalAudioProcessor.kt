@@ -258,8 +258,10 @@ class MdxVocalAudioProcessor(
     private fun reportModelError(message: String) {
         if (toldAboutFailure) return
         toldAboutFailure = true
+        val model = VocalModelStore.readyModel()
+        val detail = model?.let { "${it.description} | $message" } ?: message
+        log("model: $detail")
         toast("Vocals-only could not separate this song: $message")
-        log("model: $message")
     }
 
     private fun reportFailure(

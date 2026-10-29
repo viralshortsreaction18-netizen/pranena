@@ -153,26 +153,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="simpmusic-vocals-only-v3"
+          TAG="simpmusic-vocals-only-v4"
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" apks/*.apk \
-            --title "SimpMusic — vocals only v3 (diagnostics)" \
-            --notes "v3 records what happens when vocals-only is switched on, so the next crash can be read instead of guessed.
+            --title "SimpMusic — vocals only v4 (shape fix)" \
+            --notes "v4 fixes the ORT_INVALID_ARGUMENT / ORT_INVALID_PROTOBUF failure that made vocals-only refuse a song.
 
-          * Every step of the vocals path now logs before it runs (toggle, model download, session
-            load, each chunk of inference) into the app log and into a text file.
-          * An uncaught exception handler writes the full stack trace to
-            Android/data/com.maxrave.simpmusic/files/vocals-only.txt and to Settings > Developer
-            option > App log.
-          * Loading the model now checks free RAM first (needs ~700 MB); below that it stops with a
-            message instead of letting the native allocator kill the process.
-          * Only one player instance runs separation; previously every ExoPlayer in the process built
-            its own 28 MB separator.
-          * R8 keep rules, largeHeap, Throwable catches and worker-thread loading from v2 are kept.
+          * The input shape is now read from the model instead of assumed. The old code always sent
+            [1, 4, 2048, 256]; the checkpoint actually declares its own dims, so ORT rejected every
+            inference with an invalid-dimension error.
+          * If the declared shape is refused, a silent self-test walks the shapes the MDX-Net family
+            ships with (2048x256, 3072x256, 2048x128, 3072x128) and keeps the one that runs.
+          * The self-test happens when the model is opened, not in the middle of a song, so a bad
+            model is reported at that point with the real ORT message.
+          * Downloads are verified against the published length; a file of the wrong size is deleted
+            and re-downloaded once automatically instead of being used (that was the
+            ORT_INVALID_PROTOBUF path).
+          * The diagnostics file now records the model description (declared input/output shapes)
+            next to any inference error.
 
-          If it still crashes: open the app, go to Settings > Developer option > App log, and send
-          that, or send the file above. It names the last operation that ran.
+          Still included: R8 keep rules, largeHeap, Throwable fallbacks, worker-thread loading,
+          free-RAM guard, one separator per process.
 
-          Pick the APK for your phone: arm64-v8a (almost all modern phones), armeabi-v7a (older),
-          or universal if unsure. Signed with a key from this build, so uninstall the old app first." \
+          Settings > Developer option > App log is where the trail lands if anything still fails." \
             --prerelease
